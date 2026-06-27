@@ -219,6 +219,27 @@ SYSTEM_PROMPT = (
     "resolution case above."
 )
 
+# Appended (not replacing) the A2UI subagent's default generation
+# guidelines. The model generating A2UI JSON is small/cheap and was
+# observed failing validation repeatedly (unresolved_binding/
+# unresolved_child errors) when it reached for data-bound Lists with
+# path templates for what is just a handful of static items - steering
+# it toward literal/static components for small fixed counts fixes that
+# failure mode directly.
+A2UI_COMPOSITION_GUIDE = (
+    "For small, fixed-size content (10 items or fewer) - such as a list of "
+    "disambiguation candidates, or a short breakdown/ranking - prefer "
+    "STATIC literal components over a data-bound List: build a Column "
+    "containing one Card per item, where each Card's children are plain "
+    "Text components with literal string values (NOT path bindings) plus "
+    "a Button with a literal label. Do NOT use the `data` argument or "
+    "path bindings (e.g. {\"path\": \"/items\"}) for these small fixed "
+    "cases - omitting `data` entirely and using only literal values is "
+    "the most reliable way to avoid unresolved_binding/unresolved_child "
+    "validation errors. Reserve List + data binding + `data` for "
+    "genuinely large or open-ended/dynamic datasets only."
+)
+
 
 async def build_agent():
     """Create a fresh ReAct agent with the MCP tools (+ the A2UI generative-UI
@@ -235,7 +256,9 @@ async def build_agent():
     """
     mcp_tools = await mcp_client.get_tools()
     llm = build_llm()
-    a2ui_tool = get_a2ui_tools({"model": llm})
+    a2ui_tool = get_a2ui_tools(
+        {"model": llm, "guidelines": {"composition_guide": A2UI_COMPOSITION_GUIDE}}
+    )
     return create_react_agent(
         llm, [*mcp_tools, a2ui_tool], prompt=SYSTEM_PROMPT, checkpointer=MemorySaver()
     )
