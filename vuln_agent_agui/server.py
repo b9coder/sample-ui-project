@@ -25,15 +25,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
-from agent import build_agent
+from agent import build_agent, mcp_client
 
 _agent = None
+_mcp_tools_by_name: dict[str, Any] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
     _agent = await build_agent()
+    mcp_tools = await mcp_client.get_tools()
+    _mcp_tools_by_name.update({t.name: t for t in mcp_tools})
     add_langgraph_fastapi_endpoint(
         app,
         LangGraphAgent(
@@ -272,6 +275,25 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     chart = _extract_chart(turn_messages) or _chart_from_cache(cache, request.message)
     return ChatResponse(reply=reply, reasoning=reasoning, trusted=trusted, chart=chart)
+
+
+@app.get("/applications")
+async def list_applications() -> dict[str, Any]:
+    """Plain REST listing of every application, for populating a
+    selection dropdown - bypasses the LLM agent loop entirely since this
+    is just a reference-data lookup, not something that needs reasoning."""
+    tool = _mcp_tools_by_name["list_applications"]
+    result = await tool.ainvoke({})
+    return json.loads(_as_text(result))
+
+
+@app.get("/users")
+async def list_users() -> dict[str, Any]:
+    """Plain REST listing of every user, for populating a selection
+    dropdown - bypasses the LLM agent loop entirely."""
+    tool = _mcp_tools_by_name["list_users"]
+    result = await tool.ainvoke({})
+    return json.loads(_as_text(result))
 
 
 @app.get("/health")

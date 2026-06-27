@@ -1,0 +1,96 @@
+/**
+ * Strip leaked A2UI component JSON out of the agent's visible chat text.
+ *
+ * The dashboard is supposed to render exclusively via the generate_a2ui
+ * tool call's side effect (see one_search_agent's system prompt), never
+ * by writing JSON into the chat reply. In practice it still leaks
+ * sometimes: the A2UI generation subagent runs its own nested
+ * model.astream() call (see ag_ui_langgraph's a2ui_tool.py), and AG-UI's
+ * generic event translator can't distinguish that inner subagent's
+ * token stream from the outer agent's reply - both surface as the same
+ * TEXT_MESSAGE_CONTENT events. We can't fix that at the wire-protocol
+ * level from the frontend, so this scans the rendered text for
+ * component-JSON-shaped blocks and removes them before display.
+ *
+ * Three shapes are recognized: the real catalog shape
+ * (`{"id": ..., "component": "KPICard", ...}`), an ad-hoc shape the
+ * model sometimes fabricates instead of actually calling the tool
+ * (`{"type": "KPICard", "data": {...}}` or similar), and the forced
+ * tool-call's own argument shape (`{"intent": "create", ...}` - see
+ * agent.py's force_dashboard_call) which leaks the same way: any nested
+ * model call's token stream (including this isolated forcing call)
+ * surfaces as the same TEXT_MESSAGE_CONTENT events as the outer agent's
+ * reply, with no way to distinguish them at the wire-protocol level.
+ */
+export function stripLeakedComponentJson(text: string): string {
+  let result = "";
+  let i = 0;
+  // Matched on the KEY only (not requiring the value or its closing
+  // quote) so a still-streaming, not-yet-complete token is caught
+  // immediately rather than flashing on screen until a later delta
+  // happens to finish closing the string. "component"/"type"/"intent"
+  // are distinctive enough keys that this rarely false-positives on
+  // legitimate prose.
+  const leakedKeyRe = /"(?:component|type|intent)"\s*:/;
+
+  while (i < text.length) {
+    if (text[i] === "{") {
+      const lookahead = text.slice(i, i + 300);
+      const looksLikeComponent =
+        leakedKeyRe.test(lookahead) || /"id"\s*:\s*"root"/.test(lookahead);
+
+      if (looksLikeComponent) {
+        let depth = 0;
+        let j = i;
+        for (; j < text.length; j++) {
+          if (text[j] === "{") depth++;
+          else if (text[j] === "}") {
+            depth--;
+            if (depth === 0) {
+              j++;
+              break;
+            }
+          }
+        }
+        // depth !== 0 means the block hasn't fully streamed in yet -
+        // suppress the remainder until it closes on a later delta.
+        i = j;
+        continue;
+      }
+    }
+    result += text[i];
+    i++;
+  }
+
+  result = result
+    .replace(/```json\s*```/g, "")
+    .replace(/```\s*```/g, "")
+    // A heading like "### Dashboard" or "**Dashboard**" that introduced
+    // a now-stripped block, left dangling with nothing under it.
+    .replace(/(^|\n)\s*#{1,6}\s*Dashboard\s*$/gim, "")
+    .replace(/(^|\n)\s*\*\*Dashboard\*\*:?\s*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return truncateDuplicateSummary(result);
+}
+
+/**
+ * When generate_a2ui fails, the model sometimes restates its entire
+ * Executive Summary/Insights/Filters & Download text a second time
+ * (plus a short "the dashboard failed" apology) instead of ending its
+ * turn silently, despite an explicit instruction not to. Deterministic
+ * fix: if "Executive Summary" appears twice, keep only the first
+ * occurrence - the content is identical either way, so nothing is lost.
+ */
+function truncateDuplicateSummary(text: string): string {
+  const marker = "Executive Summary";
+  const first = text.indexOf(marker);
+  if (first === -1) return text;
+  const second = text.indexOf(marker, first + marker.length);
+  if (second === -1) return text;
+
+  // Trim back past whatever transition sentence ("Now I'll generate the
+  // dashboard...failed...") precedes the duplicate.
+  return text.slice(0, second).trimEnd().replace(/[^\n]*$/, "").trim();
+}
