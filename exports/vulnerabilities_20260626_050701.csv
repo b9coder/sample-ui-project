@@ -1,0 +1,1 @@
+vulnerability_id,cve_id,application_id,application_name,asset_id,hostname,ip_address,os_type,server_type,internet_facing,severity,status,past_due_flag,escalated_flag,kernel_related,application_owner,os_owner,business_unit,environment,region,discovered_date,due_date,is_remediated,platform_type,operating_system,description,last_scan_date
