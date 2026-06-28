@@ -82,6 +82,19 @@ FILTER_FIELDS: list[dict[str, Any]] = [
 
 _FIELD_OPTIONS = {f["name"]: f["options"] for f in FILTER_FIELDS if f.get("options")}
 
+_SEVERITY_ORDER = ["Critical", "High", "Medium", "Low"]
+
+
+def _ordered_severity_items(severity: dict[str, int]) -> list[tuple[str, int]]:
+    """severity_breakdown's key order depends on the database's GROUP BY
+    and isn't guaranteed - always show Critical/High/Medium/Low in that
+    fixed order on charts, regardless of how the DB returned them."""
+    ordered = [(label, severity[label]) for label in _SEVERITY_ORDER if label in severity]
+    # Any unexpected severity value (shouldn't happen given
+    # ALLOWED_SEVERITIES, but don't silently drop data if it does).
+    ordered += [(k, v) for k, v in severity.items() if k not in _SEVERITY_ORDER]
+    return ordered
+
 
 def _normalize_filter_display_value(field_name: str, value: Any) -> Any:
     """Map a raw filter value (whatever casing/abbreviation the LLM
@@ -423,15 +436,16 @@ def _build_dashboard(turn_messages: list[BaseMessage]) -> dict | None:
         ]
 
         if severity:
+            severity_data = [{"label": k, "value": v} for k, v in _ordered_severity_items(severity)]
             charts.append({
                 "chartType": "donut", "title": "Findings by Severity",
                 "xKey": "label", "series": ["value"],
-                "data": [{"label": k, "value": v} for k, v in severity.items()],
+                "data": severity_data,
             })
             charts.append({
                 "chartType": "bar", "title": "Inherent Risk Count",
                 "xKey": "label", "series": ["value"],
-                "data": [{"label": k, "value": v} for k, v in severity.items()],
+                "data": severity_data,
             })
         if internet_facing:
             charts.append({

@@ -18,6 +18,17 @@ import type { ChartSpec } from "./types";
 
 const COLORS = ["#8ab4ff", "#4ade80", "#f87171", "#fbbf24", "#c084fc", "#2dd4bf", "#fb923c"];
 
+const SEVERITY_COLORS: Record<string, string> = {
+  Critical: "#ef4444", // red
+  High: "#f59e0b", // amber
+  Medium: "#eab308", // yellow
+  Low: "#3b82f6", // blue
+};
+
+function isSeverityData(data: Record<string, unknown>[], xKey: string): boolean {
+  return data.length > 0 && data.every((d) => typeof d[xKey] === "string" && d[xKey] in SEVERITY_COLORS);
+}
+
 const tooltipStyle = {
   contentStyle: { background: "#1e1e20", border: "1px solid #2e2e31", borderRadius: 8 },
   labelStyle: { color: "#ececec" },
@@ -123,7 +134,12 @@ export function Chart({ spec }: { spec: ChartSpec }) {
             <YAxis tick={{ fill: "#9b9ba1", fontSize: 11 }} width={32} />
             <Tooltip {...tooltipStyle} />
             {series.map((key, i) => (
-              <Bar key={key} dataKey={key} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} />
+              <Bar key={key} dataKey={key} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]}>
+                {isSeverityData(data, xKey) &&
+                  data.map((d, j) => (
+                    <Cell key={j} fill={SEVERITY_COLORS[d[xKey] as string]} />
+                  ))}
+              </Bar>
             ))}
           </BarChart>
         )}
