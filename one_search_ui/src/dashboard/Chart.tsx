@@ -13,6 +13,7 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
+import type { PieLabelRenderProps } from "recharts";
 import type { ChartSpec } from "./types";
 
 const COLORS = ["#8ab4ff", "#4ade80", "#f87171", "#fbbf24", "#c084fc", "#2dd4bf", "#fb923c"];
@@ -21,6 +22,28 @@ const tooltipStyle = {
   contentStyle: { background: "#1e1e20", border: "1px solid #2e2e31", borderRadius: 8 },
   labelStyle: { color: "#ececec" },
 };
+
+// Recharts' default pie label draws outside the ring with a leader line,
+// which gets clipped by the container at the compact sizes used when
+// several donuts sit side by side. Render the value INSIDE the ring
+// instead - it can never overflow.
+function renderInsideLabel(props: PieLabelRenderProps) {
+  const cx = Number(props.cx);
+  const cy = Number(props.cy);
+  const midAngle = Number(props.midAngle);
+  const innerRadius = Number(props.innerRadius);
+  const outerRadius = Number(props.outerRadius);
+  const value = props.value;
+  const RADIAN = Math.PI / 180;
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.55;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} fill="#fff" textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={600}>
+      {value}
+    </text>
+  );
+}
 
 export function Chart({ spec }: { spec: ChartSpec }) {
   const { chartType, title, xKey, series, data } = spec;
@@ -37,23 +60,24 @@ export function Chart({ spec }: { spec: ChartSpec }) {
   return (
     <div className="osa-chart-wrap">
       <div className="osa-chart-title">{title}</div>
-      <ResponsiveContainer width="100%" height={260}>
+      <ResponsiveContainer width="100%" height={chartType === "pie" || chartType === "donut" ? 190 : 260}>
         {chartType === "pie" || chartType === "donut" ? (
-          <PieChart>
+          <PieChart margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
             <Pie
               data={data}
               dataKey={series[0]}
               nameKey={xKey}
-              innerRadius={chartType === "donut" ? "55%" : 0}
-              outerRadius="80%"
-              label
+              innerRadius={chartType === "donut" ? "52%" : 0}
+              outerRadius="85%"
+              label={renderInsideLabel}
+              labelLine={false}
             >
               {data.map((_, i) => (
                 <Cell key={i} fill={COLORS[i % COLORS.length]} />
               ))}
             </Pie>
             <Tooltip {...tooltipStyle} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} iconSize={9} />
           </PieChart>
         ) : chartType === "line" ? (
           <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>

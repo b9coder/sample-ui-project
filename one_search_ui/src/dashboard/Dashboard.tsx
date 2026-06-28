@@ -12,10 +12,20 @@ export function Dashboard({
   data: DashboardData;
   onApplyFilters: (values: Record<string, unknown>) => void;
 }) {
+  const donutCharts = data.charts.filter((c) => c.chartType === "donut" || c.chartType === "pie");
+  const otherCharts = data.charts.filter((c) => c.chartType !== "donut" && c.chartType !== "pie");
+
   return (
     <div className="dashboard-wrap">
       <KPICards items={data.kpis} />
-      {data.charts.map((spec, i) => (
+      {donutCharts.length > 0 && (
+        <div className="osa-chart-row">
+          {donutCharts.map((spec, i) => (
+            <Chart key={i} spec={spec} />
+          ))}
+        </div>
+      )}
+      {otherCharts.map((spec, i) => (
         <Chart key={i} spec={spec} />
       ))}
       <FilterPanel spec={data.filters} onApply={onApplyFilters} />
