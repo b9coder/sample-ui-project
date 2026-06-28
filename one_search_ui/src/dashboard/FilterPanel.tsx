@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FilterPanelSpec } from "./types";
+import { SearchableMultiSelect } from "./SearchableMultiSelect";
 
 const SAVED_FILTERS_KEY = "one_search_saved_filters";
 
@@ -91,6 +92,14 @@ export function FilterPanel({
                   </option>
                 ))}
               </select>
+            )}
+            {field.component === "searchableMultiSelect" && field.entitySource && (
+              <SearchableMultiSelect
+                entitySource={field.entitySource}
+                selected={(values[field.name] as string[]) ?? []}
+                onChange={(next) => setField(field.name, next)}
+                placeholder={`Search ${field.label.toLowerCase()}…`}
+              />
             )}
             {field.component === "multiSelect" && (
               <div className="osa-multiselect">

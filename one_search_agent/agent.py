@@ -62,9 +62,11 @@ mcp_client = MultiServerMCPClient(
 FILTER_FIELDS: list[dict[str, Any]] = [
     {"name": "severity", "label": "Severity", "component": "multiSelect",
      "options": ["Critical", "High", "Medium", "Low"]},
-    {"name": "application", "label": "Application", "component": "text"},
+    {"name": "application", "label": "Application", "component": "searchableMultiSelect",
+     "entitySource": "applications"},
     {"name": "businessUnit", "label": "Business Unit", "component": "text"},
-    {"name": "owner", "label": "Owner", "component": "text"},
+    {"name": "owner", "label": "Owner", "component": "searchableMultiSelect",
+     "entitySource": "users"},
     {"name": "operatingSystem", "label": "Operating System", "component": "multiSelect",
      "options": ["RHEL 8", "Ubuntu 22.04", "Windows Server 2019", "Windows Server 2022",
                  "AIX 7.2", "Solaris 11"]},
@@ -284,7 +286,11 @@ SYSTEM_PROMPT = (
     "get_vulnerability_records too, but only if the turn you're refining "
     "was itself a records listing - don't introduce one that wasn't "
     "there before; same for any chart-backing tools relevant to what's "
-    "being shown).\n"
+    "being shown). The payload's 'application' values are always "
+    "canonical application_ids (selected from a dropdown, not typed "
+    "free text) - map them to the application_ids argument, never "
+    "application_names. Likewise 'owner' values are always ECNs - map "
+    "them to application_owner directly, no resolve_user call needed.\n"
     "- Produce the Insights bullets again, reflecting the updated "
     "results.\n\n"
     "Keep responses focused - the dashboard carries the detailed data, so "

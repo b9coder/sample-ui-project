@@ -291,9 +291,7 @@ export default function App() {
         onDelete={handleDeleteConversation}
       />
       <div className="chat-app">
-        <header className="chat-header">
-          One Search Vulnerability Assistant <span className="agui-badge">AG-UI</span>
-        </header>
+        <header className="chat-header">One Search Vulnerability Assistant</header>
 
         {!hasMessages ? (
           <div className="landing">

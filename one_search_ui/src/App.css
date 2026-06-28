@@ -60,7 +60,34 @@
 
 .sidebar-header {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-brand-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gpt-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar.collapsed .sidebar-brand-icon {
+  margin-bottom: 4px;
 }
 
 .sidebar-new-btn {
@@ -219,16 +246,6 @@
   top: 0;
   background: var(--gpt-bg);
   z-index: 1;
-}
-
-.agui-badge {
-  font-size: 11px;
-  font-weight: 600;
-  color: #8ab4ff;
-  background: rgba(138, 180, 255, 0.12);
-  border: 1px solid rgba(138, 180, 255, 0.35);
-  border-radius: 999px;
-  padding: 2px 8px;
 }
 
 .landing {
@@ -494,6 +511,81 @@
   background: #2563eb;
   border-color: #2563eb;
   color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.osa-chip-remove {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+.osa-searchable-select {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.osa-searchable-select-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.osa-searchable-select input[type="text"] {
+  width: 100%;
+}
+
+.osa-searchable-select-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--gpt-surface);
+  border: 1px solid var(--gpt-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.osa-searchable-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--gpt-text);
+}
+
+.osa-searchable-select-option:hover {
+  background: var(--gpt-border);
+}
+
+.osa-searchable-select-option.selected {
+  color: #8ab4ff;
+}
+
+.osa-searchable-select-option input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+.osa-searchable-select-empty {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--gpt-muted);
 }
 
 .osa-filter-actions {

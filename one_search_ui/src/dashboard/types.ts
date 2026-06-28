@@ -14,13 +14,24 @@ export interface ChartSpec {
   data: Record<string, unknown>[];
 }
 
-export type FilterFieldType = "multiSelect" | "checkbox" | "text" | "select";
+export type FilterFieldType =
+  | "multiSelect"
+  | "checkbox"
+  | "text"
+  | "select"
+  | "searchableMultiSelect";
+
+export type EntitySource = "applications" | "users";
 
 export interface FilterField {
   name: string;
   label: string;
   component: FilterFieldType;
   options?: string[];
+  // For "searchableMultiSelect" fields: which Node API to fetch
+  // options from (see src/dashboard/entityApi.ts) - applications/users
+  // are too numerous to bake into static `options` like severity/env.
+  entitySource?: EntitySource;
 }
 
 export interface FilterPanelSpec {

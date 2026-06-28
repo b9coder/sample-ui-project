@@ -1,6 +1,21 @@
 import { useMemo, useState } from "react";
 import type { Conversation } from "./api";
 
+// Placeholder product mark - swap for a real logo when one exists.
+function BrandIcon() {
+  return (
+    <svg className="sidebar-brand-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M12 2L4 5v6c0 5 3.4 8.6 8 11 4.6-2.4 8-6 8-11V5l-8-3z"
+        fill="#2563eb"
+        stroke="#8ab4ff"
+        strokeWidth="1.2"
+      />
+      <path d="M9 12l2 2 4-4.5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function Sidebar({
   conversations,
   activeId,
@@ -45,6 +60,7 @@ export function Sidebar({
   if (collapsed) {
     return (
       <div className="sidebar collapsed">
+        <BrandIcon />
         <button className="sidebar-toggle" onClick={onToggleCollapse} title="Expand sidebar">
           »
         </button>
@@ -55,6 +71,10 @@ export function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-header">
+        <div className="sidebar-brand">
+          <BrandIcon />
+          <span className="sidebar-brand-name">Product Name</span>
+        </div>
         <button className="sidebar-toggle" onClick={onToggleCollapse} title="Collapse sidebar">
           «
         </button>
