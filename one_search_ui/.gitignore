@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 .env
+
+# Generated conversation metadata (see server/conversationStore.ts)
+server/conversations.json

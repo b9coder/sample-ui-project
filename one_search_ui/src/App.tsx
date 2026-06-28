@@ -1,42 +1,45 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentSubscriber } from "@ag-ui/client";
 import { aguiAgent } from "./agent";
 import { Dashboard } from "./dashboard/Dashboard";
-import type { Dashboard as DashboardData } from "./dashboard/types";
+import { Table } from "./dashboard/Table";
+import type { Dashboard as DashboardData, TableSpec } from "./dashboard/types";
+import { summarizeFilters } from "./dashboard/filterLabels";
 import { makeMessage, type ChatMessage, type ReasoningStep } from "./types";
 import { stripLeakedComponentJson } from "./sanitizeReply";
+import { Sidebar } from "./conversations/Sidebar";
+import * as conversationsApi from "./conversations/api";
+import type { Conversation } from "./conversations/api";
+import { loadMessages, saveMessages, clearMessages } from "./conversations/storage";
 import "./App.css";
 
-// Maps the FilterPanel's field `name`s (see agent.py's FILTER_FIELDS)
-// to a human-readable label, for summarizing an apply_filters action in
-// the chat bubble instead of showing the raw payload.
-const FILTER_FIELD_LABELS: Record<string, string> = {
-  severity: "Severity",
-  application: "Application",
-  businessUnit: "Business Unit",
-  owner: "Owner",
-  operatingSystem: "Operating System",
-  environment: "Environment",
-  region: "Region",
-  isPastDue: "Past Due",
-  isEscalated: "Escalated",
-  internetFacing: "Internet Facing",
-  kernelRelated: "Kernel Related",
-  specificServer: "Specific Server",
-};
+const RESULT_PREVIEW_LIMIT = 1500;
+const SIDEBAR_COLLAPSED_KEY = "one_search_sidebar_collapsed";
+const DEFAULT_NAME = "New conversation";
 
-function summarizeFilters(context: Record<string, unknown>): string {
-  const parts = Object.entries(context)
-    .filter(([, value]) => value !== "" && value !== null && value !== undefined)
-    .filter(([, value]) => !(Array.isArray(value) && value.length === 0))
-    .map(([key, value]) => {
-      const label = FILTER_FIELD_LABELS[key] ?? key;
-      const display = Array.isArray(value) ? value.join(", ") : String(value);
-      return `${label}: ${display}`;
-    });
-  return parts.length > 0 ? `Applied filters — ${parts.join(", ")}` : "Cleared all filters";
+function ReasoningStepView({ step }: { step: ReasoningStep }) {
+  const isTruncatable = step.result && step.result.length > RESULT_PREVIEW_LIMIT;
+  const [expanded, setExpanded] = useState(false);
+  const shown =
+    isTruncatable && !expanded ? step.result.slice(0, RESULT_PREVIEW_LIMIT) + "…" : step.result;
+
+  return (
+    <div className="reasoning-step">
+      <div className="reasoning-tool">
+        Called <code>{step.tool}</code>
+      </div>
+      <pre className="reasoning-args">{JSON.stringify(step.args, null, 2)}</pre>
+      <div className="reasoning-result-label">Result</div>
+      <pre className="reasoning-result">{shown}</pre>
+      {isTruncatable && (
+        <button className="reasoning-toggle" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "Show full result"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function ReasoningLog({ steps }: { steps: ReasoningStep[] }) {
@@ -51,18 +54,7 @@ function ReasoningLog({ steps }: { steps: ReasoningStep[] }) {
       {open && (
         <div className="reasoning-log">
           {steps.map((step, i) => (
-            <div key={i} className="reasoning-step">
-              <div className="reasoning-tool">
-                Called <code>{step.tool}</code>
-              </div>
-              <pre className="reasoning-args">{JSON.stringify(step.args, null, 2)}</pre>
-              <div className="reasoning-result-label">Result</div>
-              <pre className="reasoning-result">
-                {step.result && step.result.length > 1500
-                  ? step.result.slice(0, 1500) + "…"
-                  : step.result}
-              </pre>
-            </div>
+            <ReasoningStepView key={i} step={step} />
           ))}
         </div>
       )}
@@ -71,18 +63,49 @@ function ReasoningLog({ steps }: { steps: ReasoningStep[] }) {
 }
 
 export default function App() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastRowRef = useRef<HTMLDivElement>(null);
+  const prevCountRef = useRef(0);
+  const activeIdRef = useRef<string | null>(null);
   // tool_call_id -> {name, args}, so result events (which carry no name,
   // only id) can be matched back to the call that produced them.
   const toolCallById = useRef(new Map<string, { name: string; args: Record<string, unknown> }>());
 
+  // Bootstrap: load the conversation list, creating one if there are
+  // none yet, and switch into the most recently active one.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+    conversationsApi.listConversations().then(async (list) => {
+      let initial = list;
+      if (initial.length === 0) {
+        const created = await conversationsApi.createConversation();
+        initial = [created];
+      }
+      setConversations(initial);
+      const first = initial[0];
+      activeIdRef.current = first.id;
+      setActiveId(first.id);
+      aguiAgent.threadId = first.id;
+      setMessages(loadMessages(first.id));
+    });
+  }, []);
+
+  // Scroll the newest message's TOP into view once, when it's added -
+  // not on every streamed token (messages updates on each one), which
+  // would otherwise keep yanking the view down to chase the cursor.
+  useEffect(() => {
+    if (messages.length > prevCountRef.current) {
+      lastRowRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    prevCountRef.current = messages.length;
+  }, [messages.length]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -91,9 +114,56 @@ export default function App() {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
 
+  // Persist this conversation's transcript whenever it changes - the
+  // Node conversations API only tracks metadata, not message content.
+  useEffect(() => {
+    if (activeId) saveMessages(activeId, messages);
+  }, [activeId, messages]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  const switchConversation = useCallback((id: string) => {
+    if (id === activeIdRef.current) return;
+    activeIdRef.current = id;
+    setActiveId(id);
+    aguiAgent.threadId = id;
+    aguiAgent.setMessages([]);
+    setMessages(loadMessages(id));
+  }, []);
+
+  async function handleCreateConversation() {
+    const created = await conversationsApi.createConversation();
+    setConversations((prev) => [created, ...prev]);
+    switchConversation(created.id);
+  }
+
+  async function handleRenameConversation(id: string, name: string) {
+    const updated = await conversationsApi.renameConversation(id, name);
+    setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
+  }
+
+  async function handleDeleteConversation(id: string) {
+    await conversationsApi.deleteConversation(id);
+    clearMessages(id);
+    const remaining = conversations.filter((c) => c.id !== id);
+    if (id === activeIdRef.current) {
+      if (remaining.length > 0) {
+        switchConversation(remaining[0].id);
+      } else {
+        const created = await conversationsApi.createConversation();
+        remaining.push(created);
+        switchConversation(created.id);
+      }
+    }
+    setConversations(remaining);
+  }
+
   async function sendMessage(overrideText?: string, displayText?: string) {
     const text = (overrideText ?? input).trim();
     if (!text || loading) return;
+    const conversationId = activeIdRef.current;
 
     setMessages((prev) => [...prev, makeMessage("user", displayText ?? text)]);
     setInput("");
@@ -145,14 +215,36 @@ export default function App() {
       // via AG-UI's standard state mechanism (no tool call needed) - by
       // the time runAgent resolves, agent.state reflects this turn's
       // final graph state.
-      const dashboard = (aguiAgent.state as { dashboard?: DashboardData | null })?.dashboard;
-      if (dashboard) {
-        updateAssistant((m) => ({ ...m, dashboard }));
+      const state = aguiAgent.state as {
+        dashboard?: DashboardData | null;
+        records_table?: TableSpec | null;
+      };
+      if (state?.dashboard) {
+        updateAssistant((m) => ({ ...m, dashboard: state.dashboard! }));
+      }
+      if (state?.records_table) {
+        updateAssistant((m) => ({ ...m, recordsTable: state.records_table! }));
       }
     } catch (err) {
       updateAssistant((m) => ({ ...m, content: `Error: ${(err as Error).message}` }));
     } finally {
       setLoading(false);
+    }
+
+    if (conversationId) {
+      const conversation = conversations.find((c) => c.id === conversationId);
+      if (conversation && conversation.name === DEFAULT_NAME) {
+        const autoName = text.length > 60 ? text.slice(0, 60) + "…" : text;
+        void handleRenameConversation(conversationId, autoName);
+      } else {
+        void conversationsApi.touchConversation(conversationId).then(() => {
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === conversationId ? { ...c, updatedAt: new Date().toISOString() } : c
+            )
+          );
+        });
+      }
     }
   }
 
@@ -187,54 +279,74 @@ export default function App() {
   );
 
   return (
-    <div className="chat-app">
-      <header className="chat-header">
-        One Search Vulnerability Assistant <span className="agui-badge">AG-UI</span>
-      </header>
+    <div className="app-shell">
+      <Sidebar
+        conversations={conversations}
+        activeId={activeId}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+        onSelect={switchConversation}
+        onCreate={handleCreateConversation}
+        onRename={handleRenameConversation}
+        onDelete={handleDeleteConversation}
+      />
+      <div className="chat-app">
+        <header className="chat-header">
+          One Search Vulnerability Assistant <span className="agui-badge">AG-UI</span>
+        </header>
 
-      {!hasMessages ? (
-        <div className="landing">
-          <h1>Ask about vulnerabilities</h1>
-          <div className="landing-input">{inputBar}</div>
-        </div>
-      ) : (
-        <>
-          <div className="chat-window">
-            {messages.map((m) => (
-              <div key={m.id} className={`message-row ${m.role}`}>
-                {m.role === "user" ? (
-                  <div className="bubble user">{m.content}</div>
-                ) : (
-                  <div className="assistant-card">
-                    <div className="assistant-text">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {m.content || (loading ? "" : "…")}
-                      </ReactMarkdown>
-                    </div>
-                    {m.dashboard && (
-                      <Dashboard data={m.dashboard} onApplyFilters={handleApplyFilters} />
-                    )}
-                    <ReasoningLog steps={m.reasoning} />
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {loading && (
-              <div className="message-row assistant">
-                <div className="typing-indicator">
-                  <span className="typing-dot" />
-                  <span className="typing-dot" />
-                  <span className="typing-dot" />
-                </div>
-              </div>
-            )}
-            <div ref={bottomRef} />
+        {!hasMessages ? (
+          <div className="landing">
+            <h1>Ask about vulnerabilities</h1>
+            <div className="landing-input">{inputBar}</div>
           </div>
+        ) : (
+          <>
+            <div className="chat-window">
+              {messages.map((m, i) => (
+                <div
+                  key={m.id}
+                  ref={i === messages.length - 1 ? lastRowRef : undefined}
+                  className={`message-row ${m.role}`}
+                >
+                  {m.role === "user" ? (
+                    <div className="bubble user">{m.content}</div>
+                  ) : (
+                    <div className="assistant-card">
+                      <div className="assistant-text">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {m.content || (loading ? "" : "…")}
+                        </ReactMarkdown>
+                      </div>
+                      {m.dashboard && (
+                        <Dashboard data={m.dashboard} onApplyFilters={handleApplyFilters} />
+                      )}
+                      {m.recordsTable && (
+                        <div className="osa-records-panel">
+                          <Table spec={m.recordsTable} />
+                        </div>
+                      )}
+                      <ReasoningLog steps={m.reasoning} />
+                    </div>
+                  )}
+                </div>
+              ))}
 
-          <div className="chat-input-bar">{inputBar}</div>
-        </>
-      )}
+              {loading && (
+                <div className="message-row assistant">
+                  <div className="typing-indicator">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="chat-input-bar">{inputBar}</div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

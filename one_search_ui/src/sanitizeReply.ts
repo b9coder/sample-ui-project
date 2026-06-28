@@ -72,7 +72,22 @@ export function stripLeakedComponentJson(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return truncateDuplicateSummary(result);
+  return stripDownloadLinkLines(truncateDuplicateSummary(result));
+}
+
+/**
+ * Despite the system prompt forbidding it, the model occasionally still
+ * writes a sentence like "you can download the results [here](...)"
+ * duplicating the dashboard's own DownloadCard widget. Drop any line
+ * containing a markdown link to the export endpoint.
+ */
+function stripDownloadLinkLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/\[[^\]]*\]\([^)]*\/downloads\/[^)]*\.csv\)/i.test(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**

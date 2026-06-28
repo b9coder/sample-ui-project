@@ -52,7 +52,7 @@ export function Table({ spec }: { spec: TableSpec }) {
   return (
     <div className="osa-table-wrap">
       <div className="osa-table-header">
-        <div className="osa-table-title">Matching Vulnerabilities</div>
+        <div className="osa-table-title">Vulnerability Records</div>
         <button className="osa-btn" onClick={exportCsv}>
           Export page
         </button>

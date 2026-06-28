@@ -6,14 +6,206 @@
   --gpt-muted: #9b9ba1;
 }
 
-.chat-app {
+.app-shell {
   display: flex;
-  flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: var(--gpt-bg);
   color: var(--gpt-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   text-align: left;
+}
+
+.chat-app {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--gpt-bg);
+}
+
+/* --- Sidebar --- */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0b;
+  border-right: 1px solid var(--gpt-border);
+  padding: 12px;
+  gap: 10px;
+}
+
+.sidebar.collapsed {
+  width: 44px;
+  align-items: center;
+  padding: 12px 6px;
+}
+
+.sidebar-toggle {
+  background: none;
+  border: 1px solid var(--gpt-border);
+  border-radius: 8px;
+  color: var(--gpt-text);
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.sidebar-toggle:hover {
+  background: var(--gpt-surface);
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sidebar-new-btn {
+  background: none;
+  border: 1px solid var(--gpt-border);
+  border-radius: 10px;
+  color: var(--gpt-text);
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.sidebar-new-btn:hover {
+  background: var(--gpt-surface);
+}
+
+.sidebar-search {
+  background: var(--gpt-surface);
+  border: 1px solid var(--gpt-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--gpt-text);
+}
+
+.sidebar-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--gpt-muted);
+}
+
+.sidebar-item:hover {
+  background: var(--gpt-surface);
+}
+
+.sidebar-item.active {
+  background: var(--gpt-surface);
+  color: var(--gpt-text);
+  font-weight: 600;
+}
+
+.sidebar-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-item-actions {
+  display: none;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.sidebar-item:hover .sidebar-item-actions {
+  display: flex;
+}
+
+.sidebar-item-action {
+  background: none;
+  border: none;
+  color: var(--gpt-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.sidebar-item-action:hover {
+  color: var(--gpt-text);
+  background: var(--gpt-border);
+}
+
+.sidebar-item-edit {
+  flex: 1;
+  background: var(--gpt-bg);
+  border: 1px solid #8ab4ff;
+  border-radius: 6px;
+  color: var(--gpt-text);
+  font-size: 14px;
+  padding: 4px 6px;
+}
+
+.sidebar-empty {
+  color: var(--gpt-muted);
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px;
+  border-top: 1px solid var(--gpt-border);
+}
+
+.sidebar-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #6c5ce7;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.sidebar-user-info {
+  overflow: hidden;
+}
+
+.sidebar-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gpt-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-user-email {
+  font-size: 12px;
+  color: var(--gpt-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-header {
@@ -70,6 +262,8 @@
   gap: 24px;
   padding: 24px;
   box-sizing: border-box;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .message-row {
@@ -128,6 +322,10 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.osa-records-panel {
+  margin-top: 14px;
 }
 
 /* --- KPICard --- */
@@ -194,6 +392,20 @@
   text-align: center;
 }
 
+.osa-criteria {
+  font-size: 12px;
+  color: var(--gpt-muted);
+  background: var(--gpt-surface);
+  border: 1px solid var(--gpt-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.osa-criteria-label {
+  font-weight: 600;
+  color: var(--gpt-text);
+}
+
 /* --- FilterPanel --- */
 .osa-filter-panel {
   background: var(--gpt-surface);
@@ -207,6 +419,26 @@
   font-weight: 600;
   color: var(--gpt-muted);
   margin-bottom: 10px;
+}
+
+/* Set apart from the rest of the dashboard output - this is an
+   invitation to refine further, not more data to read. */
+.osa-next-steps {
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--gpt-border);
+}
+
+.osa-next-steps-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #8ab4ff;
+  margin-bottom: 8px;
+}
+
+.osa-next-steps .osa-filter-panel {
+  background: rgba(138, 180, 255, 0.06);
+  border: 1px solid rgba(138, 180, 255, 0.25);
 }
 
 .osa-filter-fields {
@@ -442,6 +674,12 @@
   color: var(--gpt-muted);
   margin-top: 6px;
   margin-bottom: 2px;
+}
+
+.reasoning-step .reasoning-toggle {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
 }
 
 .reasoning-args,

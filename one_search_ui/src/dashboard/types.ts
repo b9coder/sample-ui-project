@@ -50,6 +50,9 @@ export interface Dashboard {
   kpis: KPIItem[];
   charts: ChartSpec[];
   filters: FilterPanelSpec;
-  table: TableSpec;
-  download: DownloadSpec;
+  // null when this turn never called get_vulnerability_summary (e.g. a
+  // pure trend/ranking question) - the filter panel and download
+  // button only make sense alongside a summary query. The raw records
+  // table is a separate panel - see recordsTable on ChatMessage.
+  download: DownloadSpec | null;
 }
