@@ -1,12 +1,6 @@
 import type { Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  listConversations,
-  createConversation,
-  renameConversation,
-  deleteConversation,
-  touchConversation,
-} from "./conversationStore.ts";
+import { getConversationsSource } from "./dataSources/index.ts";
 
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -38,10 +32,11 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 /**
  * Vite dev-server middleware exposing CRUD for conversation metadata
- * (id/name/timestamps - not message content, see conversationStore.ts)
- * directly inside the same process as `npm run dev`, under /api/conversations.
- * Dev-only, same as the rest of this project's setup - there's no
- * production server to attach this to.
+ * (id/name/timestamps - not message content, see dataSources/) directly
+ * inside the same process as `npm run dev`, under /api/conversations.
+ * Backed by whichever store CONVERSATIONS_BACKEND selects (sqlite by
+ * default - see dataSources/config.ts). Dev-only, same as the rest of
+ * this project's setup - there's no production server to attach this to.
  */
 export function conversationsApiPlugin(): Plugin {
   return {
@@ -49,18 +44,19 @@ export function conversationsApiPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use("/api/conversations", async (req, res, _next) => {
         try {
+          const store = getConversationsSource();
           const url = new URL(req.url ?? "/", "http://localhost");
           const segments = url.pathname.split("/").filter(Boolean);
           const id = segments[0];
           const subresource = segments[1];
 
           if (req.method === "GET" && !id) {
-            return sendJson(res, 200, listConversations());
+            return sendJson(res, 200, await store.list());
           }
 
           if (req.method === "POST" && !id) {
             const body = await readJsonBody(req);
-            const conversation = createConversation(
+            const conversation = await store.create(
               typeof body.name === "string" ? body.name : undefined
             );
             return sendJson(res, 201, conversation);
@@ -71,18 +67,18 @@ export function conversationsApiPlugin(): Plugin {
             if (typeof body.name !== "string" || !body.name.trim()) {
               return sendJson(res, 400, { error: "name is required" });
             }
-            const updated = renameConversation(id, body.name);
+            const updated = await store.rename(id, body.name);
             if (!updated) return sendJson(res, 404, { error: "not found" });
             return sendJson(res, 200, updated);
           }
 
           if (req.method === "POST" && id && subresource === "touch") {
-            touchConversation(id);
+            await store.touch(id);
             return sendJson(res, 204, null);
           }
 
           if (req.method === "DELETE" && id && !subresource) {
-            const deleted = deleteConversation(id);
+            const deleted = await store.delete(id);
             if (!deleted) return sendJson(res, 404, { error: "not found" });
             return sendJson(res, 204, null);
           }

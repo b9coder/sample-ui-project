@@ -1,5 +1,5 @@
 import type { Plugin } from "vite";
-import { listApplications, listUsers } from "./entityStore.ts";
+import { getApplicationsSource, getUsersSource } from "./dataSources/index.ts";
 
 function sendJson(res: import("node:http").ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
@@ -10,25 +10,26 @@ function sendJson(res: import("node:http").ServerResponse, status: number, body:
 /**
  * Vite dev-server middleware exposing read-only reference data for the
  * searchable Application/Owner filter dropdowns - GET /api/applications
- * and GET /api/users, reading application_details/user_details
- * directly out of the same SQLite file the Python agent's MCP server
- * uses (see entityStore.ts). Dev-only, same as conversationsPlugin.ts.
+ * and GET /api/users. Each resource independently picks its backend
+ * (sqlite/postgres/sqlserver/starburst) via APPLICATIONS_BACKEND/
+ * USERS_BACKEND env vars - see dataSources/config.ts. Dev-only, same as
+ * conversationsPlugin.ts.
  */
 export function entityApiPlugin(): Plugin {
   return {
     name: "entity-api",
     configureServer(server) {
-      server.middlewares.use("/api/applications", (_req, res) => {
+      server.middlewares.use("/api/applications", async (_req, res) => {
         try {
-          sendJson(res, 200, listApplications());
+          sendJson(res, 200, await getApplicationsSource().listApplications());
         } catch (err) {
           sendJson(res, 500, { error: (err as Error).message });
         }
       });
 
-      server.middlewares.use("/api/users", (_req, res) => {
+      server.middlewares.use("/api/users", async (_req, res) => {
         try {
-          sendJson(res, 200, listUsers());
+          sendJson(res, 200, await getUsersSource().listUsers());
         } catch (err) {
           sendJson(res, 500, { error: (err as Error).message });
         }
