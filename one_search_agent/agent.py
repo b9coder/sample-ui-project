@@ -31,12 +31,15 @@ from typing_extensions import TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool, StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
+
+from identity import get_current_employee_id
 
 load_dotenv()
 
@@ -274,19 +277,29 @@ SYSTEM_PROMPT = (
     "condition (e.g. 'critical AND on Linux'), make an ADDITIONAL "
     "get_vulnerability_summary call with both filters applied to get the "
     "real joint count before stating it. Never fabricate a percentage.\n\n"
-    "Do NOT write an Executive Summary, do NOT restate the total/Critical/"
+    "Your text reply MUST end after the Insights bullets - no further "
+    "heading, section, or sentence after them, ever. In particular, do "
+    "NOT write an Executive Summary, do NOT restate the total/Critical/"
     "High/Past Due/Escalated/Internet-facing counts as a bullet list or "
-    "paragraph, do NOT write a markdown table (or any other listing) of "
-    "individual vulnerability records, and do NOT write a download link "
-    "or mention the CSV/export/download_url in any form (e.g. 'you can "
-    "download the results here [link]') - an interactive dashboard (KPI "
+    "paragraph, and do NOT list individual vulnerability records in ANY "
+    "form - not a markdown table, not a numbered list, not a bulleted "
+    "per-record breakdown (e.g. 'Vulnerability ID: ... Hostname: ... CVE: "
+    "...' repeated per row), not a 'Detailed List of...' section. This "
+    "applies no matter how few rows matched or how the user phrased the "
+    "request ('show me', 'list them', 'give me details on each one') - "
+    "the answer to a request for a list of vulnerabilities is STILL just "
+    "Insights bullets in your text; the actual rows belong exclusively in "
+    "the results table that renders automatically below your text, never "
+    "spelled out by you. Likewise do NOT write a download link or "
+    "mention the CSV/export/download_url in any form (e.g. 'you can "
+    "download the results here [link]'). An interactive dashboard (KPI "
     "cards, charts, a live filter panel, a full results table, and a "
     "download button) is rendered automatically on screen below your text "
     "from the SAME tool calls described above, and it already covers all "
     "of that. You do not generate it, request it, or describe it - just "
     "make the tool calls with the right filters and write the Insights "
-    "bullets. Do not mention 'rendering a dashboard' or similar - it "
-    "simply appears.\n\n"
+    "bullets, then stop. Do not mention 'rendering a dashboard' or "
+    "similar - it simply appears.\n\n"
     "## Filter refinement flow\n"
     "When you receive a message that looks like a structured filter-apply "
     "payload (starting with '[UI_ACTION apply_filters]' followed by JSON), "
@@ -614,6 +627,43 @@ def _build_graph(inner_agent) -> StateGraph:
     return graph
 
 
+# The vulnerability-query tools that need an authenticated caller
+# identity for access control (see vulnerability_mcp's
+# VulnerabilityRepository - it ANDs an authorization condition into
+# the query whenever employee_id is set). Entity-lookup tools
+# (resolve_application, resolve_user, list_applications, list_users)
+# aren't gated - those just resolve names to IDs without exposing
+# vulnerability data.
+_IDENTITY_INJECTED_TOOLS = {
+    "get_vulnerability_summary",
+    "get_vulnerability_records",
+    "get_risk_ranking",
+    "get_remediation_trend",
+}
+
+
+def _with_injected_identity(tool: BaseTool) -> BaseTool:
+    """Wrap an MCP tool so every call deterministically carries the
+    current request's authenticated employee_id, overwriting whatever
+    (if anything) the LLM supplied for that argument - this is a
+    security-relevant parameter and must never depend on the model
+    choosing to pass, or not override, it correctly.
+    """
+    if tool.name not in _IDENTITY_INJECTED_TOOLS:
+        return tool
+
+    async def _call(**kwargs: Any) -> Any:
+        kwargs["employee_id"] = get_current_employee_id()
+        return await tool.ainvoke(kwargs)
+
+    return StructuredTool.from_function(
+        coroutine=_call,
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+    )
+
+
 async def build_agent():
     """Create a fresh ReAct agent with the MCP tools loaded, wrapped with
     the deterministic dashboard-building node described above.
@@ -623,6 +673,7 @@ async def build_agent():
     tool results and applied filters instead of starting over each turn.
     """
     mcp_tools = await mcp_client.get_tools()
+    mcp_tools = [_with_injected_identity(t) for t in mcp_tools]
     llm = build_llm()
     inner_agent = create_react_agent(llm, mcp_tools, prompt=SYSTEM_PROMPT)
     graph = _build_graph(inner_agent)

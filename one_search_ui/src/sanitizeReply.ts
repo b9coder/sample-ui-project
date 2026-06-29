@@ -72,7 +72,39 @@ export function stripLeakedComponentJson(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return stripDownloadLinkLines(truncateDuplicateSummary(result));
+  return stripRecordListing(stripDownloadLinkLines(truncateDuplicateSummary(result)));
+}
+
+/**
+ * Despite an explicit system-prompt rule against it, the model
+ * sometimes still spells out individual vulnerability records in text
+ * (a markdown table, a numbered list, a per-record "Vulnerability ID:
+ * ... Hostname: ..." breakdown, often grouped under per-OS/per-app
+ * headers) - especially when the user explicitly asks to "list them
+ * out", which the model tends to treat as overriding the system
+ * prompt. That data belongs exclusively in the results table that
+ * renders automatically below the text. Truncate everything from the
+ * first sign of a per-record dump onward, then walk back over any
+ * now-dangling heading/group-label lines left with nothing under them.
+ */
+function stripRecordListing(text: string): string {
+  const marker = /Vulnerability ID\s*:|VULN-\d{4,}/i;
+  const lines = text.split("\n");
+  const idx = lines.findIndex((line) => marker.test(line));
+  if (idx === -1) return text;
+
+  let cut = idx;
+  const isDanglingHeading = (line: string) =>
+    /^\s*$/.test(line) || // blank
+    /^\s*#{1,6}\s*.*$/.test(line) || // markdown heading
+    /^\s*[-*]?\s*\*\*[^*]+\*\*:?\s*$/.test(line) || // bold-only line, e.g. "- **Windows Server 2019**"
+    /^\s*\d+\.\s*\*\*[^*]+\*\*:?\s*$/.test(line) || // numbered bold-only line
+    /^[A-Za-z][^:]*:\s*$/.test(line); // plain "Some Heading:" line
+  while (cut > 0 && isDanglingHeading(lines[cut - 1])) {
+    cut--;
+  }
+
+  return lines.slice(0, cut).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
