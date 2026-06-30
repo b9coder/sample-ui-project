@@ -20,6 +20,38 @@ the LangGraph state's `dashboard` key. AG-UI's standard state-sync
 (STATE_SNAPSHOT) automatically streams any state field to the frontend
 with zero extra protocol wiring - no LLM call, no validation, no
 leak risk, and it's wrong only if the underlying tool data is wrong.
+
+In addition to `dashboard`, every turn also gets a declarative UI
+description in the `ui_spec`/`ui_data` state keys (see
+`_build_ui_data`/`_build_ui_spec`) - a generic, renderer-agnostic
+alternative to `dashboard` that strictly separates presentation from
+trusted data:
+
+- `ui_data` is a registry of this turn's MCP tool results, copied
+  VERBATIM (see `_build_ui_data`) - never reshaped, aggregated, or
+  rewritten, so it's exactly as trustworthy as the tool that produced
+  it.
+- `ui_spec` (see `_build_ui_spec`) is a layout (rows of components)
+  plus a components list, where every `chart`/`table` component
+  references its data via a `dataRef` STRING (a dotted path into
+  `ui_data`, e.g. "get_vulnerability_summary.breakdowns.
+  severity_breakdown") rather than embedding any values - the
+  component only carries presentation metadata (chart type, which
+  field names to plot, column labels). The frontend resolves each
+  `dataRef` and binds the real tool data directly (see
+  one_search_ui/src/declarative/). `markdown` components are the only
+  place free-text/AI-influenced content belongs, since they don't
+  carry a trust claim about matching the underlying numbers exactly.
+
+This is built 100% deterministically, same as `dashboard` - no LLM is
+involved in either the data extraction or the layout decision, by
+design: an LLM choosing which dataRef paths exist is just as failure-
+prone as an LLM emitting raw chart data, so there is no robustness
+benefit to making the LAYOUT dynamic via an LLM call here, only risk.
+Both `dashboard` and `ui_spec`/`ui_data` are populated every turn from
+the same tool results - `dashboard` is untouched for full backward
+compatibility, and `ui_spec`/`ui_data` is the new, more general
+representation the frontend can adopt incrementally.
 """
 from __future__ import annotations
 
@@ -551,10 +583,265 @@ def _build_records_table(turn_messages: list[BaseMessage]) -> dict | None:
     return {"columns": TABLE_COLUMNS, "rows": rows}
 
 
+# The MCP tools whose results get registered VERBATIM into ui_data,
+# keyed by tool name - the full set of dataRef "namespaces" available
+# to ui_spec's components.
+_UI_DATA_TOOLS = (
+    "get_vulnerability_summary",
+    "get_vulnerability_records",
+    "get_risk_ranking",
+    "get_remediation_trend",
+)
+
+
+def _build_ui_data(turn_messages: list[BaseMessage]) -> dict[str, Any] | None:
+    """The trusted dataset registry ui_spec's dataRef strings address
+    into: this turn's MCP tool results, copied VERBATIM and keyed by
+    tool name - never reshaped, aggregated, or rewritten, so its
+    trustworthiness is identical to the tool call that produced it.
+
+    Also includes two synthetic entries, each a plain field SELECTION
+    from the verbatim tool payloads above (no math beyond what the
+    tool already computed, no LLM involvement):
+    - "_filters": the static filter FIELD DEFINITIONS plus this turn's
+      actually-applied filter VALUES (derived the exact same way
+      _build_dashboard's filter_values is), so an input_form component
+      can hydrate its current selection without the agent restating
+      anything - the values come straight from the summary tool
+      call's own arguments.
+    - "_kpis": get_vulnerability_summary's headline numbers picked out
+      into a flat {title, value} list, for a "kpi" component to bind
+      to - same 6 fields _build_dashboard's kpis list uses, just
+      exposed here as a dataRef target instead of baked into a
+      dashboard-shaped dict.
+    """
+    registry: dict[str, Any] = {}
+    for tool_name in _UI_DATA_TOOLS:
+        _, payload = _latest(turn_messages, tool_name)
+        if payload is not None:
+            registry[tool_name] = payload
+
+    summary_args, _ = _latest(turn_messages, "get_vulnerability_summary")
+    filter_values: dict[str, Any] = {}
+    for arg_name, field_name in _ARG_TO_FILTER_FIELD.items():
+        value = (summary_args or {}).get(arg_name)
+        if value not in (None, "", [], False):
+            filter_values[field_name] = _normalize_filter_display_value(field_name, value)
+    registry["_filters"] = {"fields": FILTER_FIELDS, "values": filter_values}
+
+    summary = registry.get("get_vulnerability_summary")
+    summary_total = (summary.get("summary") or {}).get("total_vulnerabilities", 0) if summary else 0
+    if summary is not None and summary_total > 0:
+        s = summary.get("summary") or {}
+        severity = (summary.get("breakdowns") or {}).get("severity_breakdown") or {}
+        registry["_kpis"] = [
+            {"title": "Total", "value": summary_total},
+            {"title": "Critical", "value": severity.get("Critical", 0)},
+            {"title": "High", "value": severity.get("High", 0)},
+            {"title": "Past Due", "value": s.get("total_past_due", 0)},
+            {"title": "Escalated", "value": s.get("total_escalated", 0)},
+            {"title": "Internet Facing", "value": s.get("total_internet_facing", 0)},
+        ]
+        # get_vulnerability_summary returns past-due/exploitable only as
+        # totals (total_past_due/total_exploitable), not as a ready-made
+        # Yes/No breakdown object the way severity/internet-facing are -
+        # these two entries are the one-step arithmetic derivation
+        # (total minus the trusted count = the complementary count)
+        # needed to chart them, same as _build_dashboard already does.
+        registry["_past_due_breakdown"] = {
+            "Yes": s.get("total_past_due", 0),
+            "No": summary_total - s.get("total_past_due", 0),
+        }
+        registry["_exploitable_breakdown"] = {
+            "Yes": s.get("total_exploitable", 0),
+            "No": summary_total - s.get("total_exploitable", 0),
+        }
+
+    return registry or None
+
+
+# Declarative-table column definitions for get_vulnerability_records -
+# unlike TABLE_COLUMNS/_RECORD_FIELD_MAP above, "key" here is the RAW
+# field name verbatim from the tool's record objects (e.g.
+# "application_name", not "application") - the table component binds
+# straight to ui_data without any field renaming, per the "pass trusted
+# data to the UI without modification" rule. Only "label" (the
+# column header text) is presentation metadata.
+_RECORD_TABLE_COLUMNS: list[dict[str, str]] = [
+    {"key": "hostname", "label": "Hostname"},
+    {"key": "application_name", "label": "Application"},
+    {"key": "severity", "label": "Severity"},
+    {"key": "cve_id", "label": "CVE"},
+    {"key": "past_due_flag", "label": "Past Due"},
+    {"key": "escalated_flag", "label": "Escalated"},
+    {"key": "operating_system", "label": "OS"},
+    {"key": "application_owner", "label": "Owner"},
+    {"key": "due_date", "label": "Due Date"},
+    {"key": "internet_facing", "label": "Internet Facing"},
+]
+
+
+def _build_ui_spec(ui_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Layout (rows of components) + a components list for the
+    declarative rendering model. Every chart/table component carries a
+    "dataRef" STRING - a dotted path into `ui_data` (e.g.
+    "get_vulnerability_summary.breakdowns.severity_breakdown" or
+    "get_vulnerability_records.records") - never any actual values;
+    the frontend resolves each dataRef and binds the real (unmodified)
+    tool data straight to the chart/table. "chart" config only
+    declares presentation metadata (chart type, which field NAMES to
+    plot) - never data. The one exception is "markdown" components,
+    whose text is free-form by design (here it's still deterministic,
+    built straight from trusted numbers - see the inline comment below
+    - but the type permits AI-authored text too, since unlike chart/
+    table it carries no claim of being a verbatim data binding).
+
+    Built 100% from `ui_data`'s already-trusted registry - no LLM call,
+    same reasoning as `_build_dashboard`.
+    """
+    if not ui_data:
+        return None
+
+    summary = ui_data.get("get_vulnerability_summary")
+    records = ui_data.get("get_vulnerability_records")
+    ranking = ui_data.get("get_risk_ranking")
+    trend = ui_data.get("get_remediation_trend")
+
+    summary_total = (summary.get("summary") or {}).get("total_vulnerabilities", 0) if summary else 0
+    has_summary = summary is not None and summary_total > 0
+    has_records = bool(records and records.get("records"))
+    has_ranking = bool(ranking and ranking.get("ranking"))
+    has_trend = bool(trend and trend.get("trend"))
+    if not has_summary and not has_records and not has_ranking and not has_trend:
+        return None
+
+    components: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+
+    if has_summary:
+        breakdowns = summary.get("breakdowns") or {}
+        severity = breakdowns.get("severity_breakdown") or {}
+
+        components.append({
+            "id": "kpi_summary", "type": "kpi",
+            "dataRef": "_kpis",
+        })
+        rows.append({"columns": [{"componentId": "kpi_summary", "width": 4}]})
+
+        # All 4 donuts share one row (matches legacy Dashboard.tsx,
+        # which groups every donut/pie-typed chart together regardless
+        # of source) - bar charts each get their own full-width row.
+        donut_ids = []
+        if severity:
+            components.append({
+                "id": "severity_chart", "type": "chart", "title": "Findings by Severity",
+                "dataRef": "get_vulnerability_summary.breakdowns.severity_breakdown",
+                "chart": {"chartType": "donut"},
+            })
+            donut_ids.append("severity_chart")
+        if breakdowns.get("internet_facing_breakdown"):
+            components.append({
+                "id": "internet_facing_chart", "type": "chart", "title": "Internet Facing",
+                "dataRef": "get_vulnerability_summary.breakdowns.internet_facing_breakdown",
+                "chart": {"chartType": "donut"},
+            })
+            donut_ids.append("internet_facing_chart")
+        if "_past_due_breakdown" in ui_data:
+            components.append({
+                "id": "past_due_chart", "type": "chart", "title": "Past Due",
+                "dataRef": "_past_due_breakdown",
+                "chart": {"chartType": "donut"},
+            })
+            donut_ids.append("past_due_chart")
+        if "_exploitable_breakdown" in ui_data:
+            components.append({
+                "id": "exploitable_chart", "type": "chart", "title": "Exploitable",
+                "dataRef": "_exploitable_breakdown",
+                "chart": {"chartType": "donut"},
+            })
+            donut_ids.append("exploitable_chart")
+        if donut_ids:
+            rows.append({"columns": [{"componentId": cid, "width": 1} for cid in donut_ids]})
+
+        # Same severity dataRef as the donut above, just charted as a
+        # bar too - no new/different data, only a second presentation
+        # of the identical trusted breakdown.
+        if severity:
+            components.append({
+                "id": "severity_bar_chart", "type": "chart", "title": "Inherent Risk Count",
+                "dataRef": "get_vulnerability_summary.breakdowns.severity_breakdown",
+                "chart": {"chartType": "bar"},
+            })
+            rows.append({"columns": [{"componentId": "severity_bar_chart", "width": 4}]})
+
+        if breakdowns.get("finding_category_breakdown"):
+            components.append({
+                "id": "platform_chart", "type": "chart", "title": "Findings by Platform",
+                "dataRef": "get_vulnerability_summary.breakdowns.finding_category_breakdown",
+                "chart": {"chartType": "bar"},
+            })
+            rows.append({"columns": [{"componentId": "platform_chart", "width": 4}]})
+
+    if has_ranking:
+        components.append({
+            "id": "ranking_chart", "type": "chart",
+            "title": f"Top {ranking.get('dimension', 'application')} by risk",
+            "dataRef": "get_risk_ranking.ranking",
+            "chart": {"chartType": "horizontalBar", "xKey": "name", "series": ["risk_score"]},
+        })
+        rows.append({"columns": [{"componentId": "ranking_chart", "width": 4}]})
+
+    if has_trend:
+        components.append({
+            "id": "trend_chart", "type": "chart", "title": "Remediation Trend",
+            "dataRef": "get_remediation_trend.trend",
+            "chart": {
+                "chartType": "line", "xKey": "month",
+                "series": ["discovered", "remediated", "past_due", "escalated"],
+            },
+        })
+        rows.append({"columns": [{"componentId": "trend_chart", "width": 4}]})
+
+    if has_records:
+        components.append({
+            "id": "records_table", "type": "table", "title": "Matching Vulnerabilities",
+            "dataRef": "get_vulnerability_records.records",
+            "columns": _RECORD_TABLE_COLUMNS,
+        })
+        rows.append({"columns": [{"componentId": "records_table", "width": 4}]})
+
+    # Own full-width row, after every chart/table but before the
+    # filter form - matches the legacy Dashboard.tsx's DownloadCard
+    # placement. "export" already exists verbatim inside the summary
+    # tool's own payload (file_name/download_url/record_count) - no
+    # new synthetic ui_data entry needed, just a dataRef straight into it.
+    if has_summary and (summary.get("export") or {}).get("download_url"):
+        components.append({
+            "id": "download_card", "type": "download",
+            "title": "Download Vulnerability Report",
+            "dataRef": "get_vulnerability_summary.export",
+        })
+        rows.append({"columns": [{"componentId": "download_card", "width": 4}]})
+
+    if has_summary or has_records:
+        components.append({
+            "id": "filters_form", "type": "input_form", "title": "Refine results",
+            "formId": "vulnerability_filters", "dataRef": "_filters",
+        })
+        rows.append({"columns": [{"componentId": "filters_form", "width": 4}]})
+
+    return {"layout": {"rows": rows}, "components": components}
+
+
 class _AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     dashboard: dict[str, Any] | None
     records_table: dict[str, Any] | None
+    # Additive declarative-rendering counterpart to dashboard/
+    # records_table above - see the module docstring's "declarative UI
+    # description" section.
+    ui_data: dict[str, Any] | None
+    ui_spec: dict[str, Any] | None
 
 
 def _turn_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -578,12 +865,16 @@ def _build_graph(inner_agent) -> StateGraph:
         turn = _turn_messages(state["messages"])
 
         if _had_unresolved_entity(turn):
-            return {"dashboard": None, "records_table": None}
+            return {
+                "dashboard": None, "records_table": None,
+                "ui_data": None, "ui_spec": None,
+            }
 
         called_search = any(name in _SEARCH_TOOLS for name, _, _ in _iter_tool_calls(turn))
         called_records = any(
             name == "get_vulnerability_records" for name, _, _ in _iter_tool_calls(turn)
         )
+        called_any = called_search or called_records
 
         # A None result is ambiguous between "this turn never searched
         # at all" (a pure follow-up - keep showing whatever was there
@@ -615,6 +906,21 @@ def _build_graph(inner_agent) -> StateGraph:
                 update["records_table"] = records_table
             elif called_records:
                 update["records_table"] = None
+
+        # ui_data/ui_spec are additive and independent of dashboard/
+        # records_table above (not mutually exclusive with them) - same
+        # clear-vs-preserve logic, just keyed off whether ANY relevant
+        # tool was called this turn rather than splitting by panel,
+        # since a single ui_spec can include both analytics and a
+        # records table together.
+        ui_data = _build_ui_data(turn)
+        ui_spec = _build_ui_spec(ui_data)
+        if ui_spec is not None:
+            update["ui_data"] = ui_data
+            update["ui_spec"] = ui_spec
+        elif called_any:
+            update["ui_data"] = None
+            update["ui_spec"] = None
 
         return update
 

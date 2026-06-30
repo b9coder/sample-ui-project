@@ -9,6 +9,30 @@ Node.js API for conversation management and filter-dropdown lookups -
 mounted into the *same* process as `npm run dev`, no separate process
 to start.
 
+## Dashboard rendering: `dashboard` vs declarative (`src/declarative/`)
+
+The agent backend sends two parallel descriptions of the same turn's
+results every time (see `../one_search_agent/README.md`'s
+"Declarative UI rendering" section): the original `dashboard` state
+field (rendered by `src/dashboard/Dashboard.tsx`) and a new generic
+`ui_spec`/`ui_data` pair (rendered by
+`src/declarative/DeclarativeDashboard.tsx`). Which one this build
+actually renders is controlled by `.env`'s `VITE_UI_RENDER_MODE`
+(`dashboard` default, or `declarative`) - this is a pure frontend
+switch, the backend always sends both regardless.
+
+The declarative renderer is type-driven: each component in
+`ui_spec.components` is one of `chart`/`table`/`markdown`/
+`input_form`, and `chart`/`table`/`input_form` components carry a
+`dataRef` (a dotted path like
+`"get_vulnerability_summary.breakdowns.severity_breakdown"`) instead
+of any embedded data - `src/declarative/resolveDataRef.ts` resolves
+the path against `ui_data` and binds the result straight into the
+existing `Chart`/`Table`/`FilterPanel` components (no new chart/table
+widgets were built - the declarative layer is a different way of
+*addressing* the same trusted data into the same renderers). Only
+`markdown` components carry free text.
+
 ## Setup
 
 ```bash

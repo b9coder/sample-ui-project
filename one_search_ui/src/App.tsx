@@ -6,6 +6,8 @@ import { aguiAgent } from "./agent";
 import { Dashboard } from "./dashboard/Dashboard";
 import { Table } from "./dashboard/Table";
 import type { Dashboard as DashboardData, TableSpec } from "./dashboard/types";
+import { DeclarativeDashboard } from "./declarative/DeclarativeDashboard";
+import type { UIData, UISpec } from "./declarative/types";
 import { summarizeFilters } from "./dashboard/filterLabels";
 import { makeMessage, type ChatMessage, type ReasoningStep } from "./types";
 import { stripLeakedComponentJson } from "./sanitizeReply";
@@ -18,6 +20,13 @@ import "./App.css";
 const RESULT_PREVIEW_LIMIT = 1500;
 const SIDEBAR_COLLAPSED_KEY = "one_search_sidebar_collapsed";
 const DEFAULT_NAME = "New conversation";
+// "dashboard" (default) keeps the existing Dashboard.tsx rendering
+// exactly as before - zero behavior change unless explicitly opted
+// into the new declarative renderer via .env's VITE_UI_RENDER_MODE.
+// The agent always computes/sends BOTH (see agent.py's
+// _build_ui_data/_build_ui_spec docstring) - this only picks which
+// one this frontend build renders.
+const UI_RENDER_MODE = import.meta.env.VITE_UI_RENDER_MODE === "declarative" ? "declarative" : "dashboard";
 
 function ReasoningStepView({ step }: { step: ReasoningStep }) {
   const isTruncatable = step.result && step.result.length > RESULT_PREVIEW_LIMIT;
@@ -218,12 +227,17 @@ export default function App() {
       const state = aguiAgent.state as {
         dashboard?: DashboardData | null;
         records_table?: TableSpec | null;
+        ui_spec?: UISpec | null;
+        ui_data?: UIData | null;
       };
       if (state?.dashboard) {
         updateAssistant((m) => ({ ...m, dashboard: state.dashboard! }));
       }
       if (state?.records_table) {
         updateAssistant((m) => ({ ...m, recordsTable: state.records_table! }));
+      }
+      if (state?.ui_spec && state?.ui_data) {
+        updateAssistant((m) => ({ ...m, uiSpec: state.ui_spec!, uiData: state.ui_data! }));
       }
     } catch (err) {
       updateAssistant((m) => ({ ...m, content: `Error: ${(err as Error).message}` }));
@@ -316,13 +330,26 @@ export default function App() {
                           {m.content || (loading ? "" : "…")}
                         </ReactMarkdown>
                       </div>
-                      {m.dashboard && (
-                        <Dashboard data={m.dashboard} onApplyFilters={handleApplyFilters} />
-                      )}
-                      {m.recordsTable && (
-                        <div className="osa-records-panel">
-                          <Table spec={m.recordsTable} />
-                        </div>
+                      {UI_RENDER_MODE === "declarative" ? (
+                        m.uiSpec &&
+                        m.uiData && (
+                          <DeclarativeDashboard
+                            spec={m.uiSpec}
+                            data={m.uiData}
+                            onApplyFilters={handleApplyFilters}
+                          />
+                        )
+                      ) : (
+                        <>
+                          {m.dashboard && (
+                            <Dashboard data={m.dashboard} onApplyFilters={handleApplyFilters} />
+                          )}
+                          {m.recordsTable && (
+                            <div className="osa-records-panel">
+                              <Table spec={m.recordsTable} />
+                            </div>
+                          )}
+                        </>
                       )}
                       <ReasoningLog steps={m.reasoning} />
                     </div>

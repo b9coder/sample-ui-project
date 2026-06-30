@@ -1,4 +1,5 @@
 import type { Dashboard, TableSpec } from "./dashboard/types";
+import type { UIData, UISpec } from "./declarative/types";
 
 export interface ReasoningStep {
   tool: string;
@@ -16,6 +17,12 @@ export interface ChatMessage {
   // get_vulnerability_records is called alongside the summary) and a
   // plain listing request ("show me vulnerabilities for app X").
   recordsTable: TableSpec | null;
+  // Declarative-UI counterpart to dashboard/recordsTable above - the
+  // agent always populates this alongside them (see agent.py's
+  // _build_ui_data/_build_ui_spec); which one actually renders is a
+  // frontend choice, see App.tsx's UI_RENDER_MODE.
+  uiSpec: UISpec | null;
+  uiData: UIData | null;
   reasoning: ReasoningStep[];
 }
 
@@ -26,6 +33,8 @@ export function makeMessage(role: ChatMessage["role"], content: string): ChatMes
     content,
     dashboard: null,
     recordsTable: null,
+    uiSpec: null,
+    uiData: null,
     reasoning: [],
   };
 }

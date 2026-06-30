@@ -10,6 +10,38 @@ actual tool results (`agent.py`'s `_build_dashboard`) and streamed to
 the frontend via AG-UI's standard state-sync mechanism - no LLM call,
 no generative-UI step.
 
+## Declarative UI rendering (`ui_spec`/`ui_data`)
+
+Every turn additionally gets a generic, renderer-agnostic description
+under the `ui_spec`/`ui_data` state keys, built the same deterministic
+way as `dashboard` (see `_build_ui_data`/`_build_ui_spec`) and synced
+alongside it - it's purely additive, `dashboard` is unchanged.
+
+- **`ui_data`** is a registry of this turn's MCP tool results, copied
+  VERBATIM and keyed by tool name (e.g. `get_vulnerability_summary`) -
+  never reshaped, aggregated, or rewritten, plus a synthetic
+  `_filters` entry (filter field definitions + this turn's applied
+  values, same derivation `_build_dashboard` already does).
+- **`ui_spec`** is a grid layout (rows of components) plus a
+  components list. Each component has a `type` of `chart`, `table`,
+  `markdown`, or `input_form`. `chart`/`table`/`input_form`
+  components carry a `dataRef` - a dotted path into `ui_data` (e.g.
+  `"get_vulnerability_summary.breakdowns.severity_breakdown"`) -
+  instead of any embedded values; the frontend resolves the path and
+  binds the real tool data straight to the component (see
+  `one_search_ui/src/declarative/`). Only `markdown` components carry
+  free text, since they're the one type without a trust claim about
+  exactly matching the underlying numbers.
+
+This is intentionally 100% deterministic - no LLM decides the layout
+or touches the data, for the same reason `dashboard` is: an LLM
+choosing which `dataRef` to bind is exactly as failure-prone as an
+LLM emitting the chart data itself, so making the *layout* dynamic via
+an LLM call would reintroduce risk without a reliability upside. Which
+of `dashboard` or `ui_spec`/`ui_data` actually renders is a frontend
+choice (`one_search_ui`'s `VITE_UI_RENDER_MODE`, default
+`dashboard`) - the backend always computes and sends both.
+
 ## Setup
 
 ```bash
