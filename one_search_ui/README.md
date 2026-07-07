@@ -21,23 +21,48 @@ actually renders is controlled by `.env`'s `VITE_UI_RENDER_MODE`
 (`dashboard` default, or `declarative`) - this is a pure frontend
 switch, the backend always sends both regardless.
 
-The declarative renderer is type-driven: each component in
-`ui_spec.components` is one of `chart`/`table`/`markdown`/
-`input_form`, and `chart`/`table`/`input_form` components carry a
-`dataRef` (a dotted path like
+The declarative renderer is type-driven and built on **shadcn/ui +
+Tailwind v4** (`src/components/ui/`, dark theme in `src/index.css`).
+Each element in `ui_spec.components` is one of
+`chart`/`table`/`markdown`/`kpi`/`download`/`input_form`, and every
+non-markdown element carries a `dataRef` (a dotted path like
 `"get_vulnerability_summary.breakdowns.severity_breakdown"`) instead
-of any embedded data - `src/declarative/resolveDataRef.ts` resolves
-the path against `ui_data` and binds the result straight into the
-existing `Chart`/`Table`/`FilterPanel` components (no new chart/table
-widgets were built - the declarative layer is a different way of
-*addressing* the same trusted data into the same renderers). Only
-`markdown` components carry free text.
+of embedded data - `src/declarative/resolveDataRef.ts` resolves the
+path against `ui_data` and binds the result into the matching
+shadcn-based element renderer in `src/declarative/elements/`
+(`ChartElement` uses shadcn's `ChartContainer`/`ChartTooltip` on
+Recharts; `TableElement`, `KpiElement`, `DownloadElement`,
+`FilterFormElement`, `MarkdownElement`). Only `markdown` elements
+carry free text. Charts support bar / horizontalBar / line / pie /
+donut.
+
+The legacy `src/dashboard/` components remain for the `dashboard`
+render mode; the shadcn rebuild is isolated to `src/declarative/`.
 
 ## Setup
 
 ```bash
 npm install
 ```
+
+## Environment (`.env`)
+
+```env
+VITE_AGUI_URL=http://localhost:8003/agui
+VITE_UI_RENDER_MODE=declarative     # "dashboard" | "declarative"
+VITE_DEV_EMPLOYEE_ID=E100000        # simulates the Okta gateway's X-Employee-Id
+```
+
+`VITE_DEV_EMPLOYEE_ID` pins the signed-in identity in local dev (the
+gateway would inject `X-Employee-Id` in production). It's sent on every
+AG-UI request, scoping all queries to that user's access, and drives
+the session-start welcome. Run `python -m vulnerability_mcp.seed_data`
+to print seeded demo ECNs to try (app owner, admin, infra owner). Leave
+blank for unrestricted local access.
+
+When a fresh conversation opens, the app auto-sends a hidden
+`[UI_ACTION session_start]` message so the agent greets the user with
+their access summary and a scoped vulnerability breakdown.
 
 ## Running
 

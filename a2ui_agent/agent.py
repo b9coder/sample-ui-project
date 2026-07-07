@@ -1,0 +1,383 @@
+"""A2UI Vulnerability Assistant - LangGraph agent.
+
+A clean-room, A2UI-first counterpart to one_search_agent. It reuses the
+same (unmodified) vulnerability_mcp MCP server for all data, but instead
+of a deterministic dashboard it has the LLM GENERATE the on-screen UI as
+an a2ui.org (https://a2ui.org) component tree - the canonical "agent
+generates the interface" A2UI use case - which the frontend renders
+through the real `@a2ui/react` library.
+
+Two model calls per turn, by design:
+  1. A ReAct agent calls the MCP tools and writes a short text reply.
+  2. A second, structured-output call turns THIS turn's tool results
+     into an A2UI component tree (constrained to a2ui_schema's Pydantic
+     union, so it can only emit valid components).
+
+The A2UI message list is attached to the LangGraph state's
+`a2ui_messages` key; AG-UI's STATE_SNAPSHOT streams it to the frontend
+with no extra protocol wiring.
+"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Annotated, Any
+
+from typing_extensions import TypedDict
+
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool, StructuredTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import create_react_agent
+
+from a2ui_schema import wrap_messages
+from layout import ARG_TO_FILTER_FIELD, Layout, bindable_paths, compile_layout
+from identity import get_current_employee_id
+
+load_dotenv()
+
+PROJECT_DIR = os.environ.get(
+    "VULN_MCP_PROJECT_DIR", "/Users/nilesh/Documents/projects/claud-playground"
+)
+PYTHON_BIN = os.environ.get("PYTHON_BIN", "python3")
+A2UI_MODEL = os.environ.get("A2UI_MODEL") or os.environ.get("OPENROUTER_MODEL")
+
+mcp_client = MultiServerMCPClient(
+    {
+        "vulnerability": {
+            "transport": "stdio",
+            "command": PYTHON_BIN,
+            "args": ["-m", "vulnerability_mcp.server"],
+            "cwd": PROJECT_DIR,
+        }
+    }
+)
+
+# Vulnerability-query tools that must carry the authenticated identity
+# for access control (the MCP server ANDs an access clause whenever
+# employee_id is set). Entity-lookup tools aren't gated.
+_IDENTITY_INJECTED_TOOLS = {
+    "get_vulnerability_summary",
+    "get_vulnerability_records",
+    "get_risk_ranking",
+    "get_remediation_trend",
+    "get_user_access",
+}
+
+_DATA_TOOLS = (
+    "get_user_access",
+    "get_vulnerability_summary",
+    "get_vulnerability_records",
+    "get_risk_ranking",
+    "get_remediation_trend",
+)
+
+
+def build_llm() -> ChatOpenAI:
+    return ChatOpenAI(
+        model=os.environ["OPENROUTER_MODEL"],
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    )
+
+
+def build_a2ui_llm() -> ChatOpenAI:
+    return ChatOpenAI(
+        model=A2UI_MODEL,
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    )
+
+
+SYSTEM_PROMPT = (
+    "You are the A2UI Vulnerability Assistant, a security-analytics copilot. "
+    "You have MCP tools for vulnerability data:\n"
+    "- get_user_access: the current user's own access (owned apps, owned "
+    "infrastructure, delegated access, admin groups, total visible count). "
+    "Call it for the session-start welcome and 'what can I see' questions.\n"
+    "- get_vulnerability_summary: totals + dimensional breakdowns (severity, "
+    "OS, platform, status, application, business unit, owner, internet-facing) "
+    "+ a CSV export, for a set of filters.\n"
+    "- get_vulnerability_records: a page of raw matching rows (only when the "
+    "user asks to see/list individual findings).\n"
+    "- get_risk_ranking: composite risk ranking of applications/owners.\n"
+    "- get_remediation_trend: month-by-month discovered/remediated counts.\n"
+    "- resolve_application / resolve_user / list_applications / list_users: "
+    "resolve fuzzy names to canonical ids; stop and ask if a lookup is "
+    "ambiguous rather than guessing.\n\n"
+    "ALWAYS call the appropriate tool(s) rather than guessing numbers, and "
+    "pass every filter the user gave into the matching tool argument.\n\n"
+    "When the message is exactly '[UI_ACTION session_start]', greet the user: "
+    "call get_user_access then get_vulnerability_summary (no filters), and "
+    "write one or two friendly sentences summarizing their access and "
+    "inviting them to explore a specific application, their past-due "
+    "findings, or their riskiest assets.\n\n"
+    "When the message starts with '[UI_ACTION apply_filters]' followed by "
+    "JSON, treat it as a filter refinement from the on-screen filter panel: "
+    "re-call get_vulnerability_summary with those filter values mapped to "
+    "the matching tool arguments (severity, environment, operating_system, "
+    "business_unit, regions, is_past_due, is_escalated, is_internet_facing) "
+    "- and get_vulnerability_records too if the previous turn was showing a "
+    "records table. Briefly note what changed.\n\n"
+    "Your TEXT reply is always short (2-4 sentences or bullets of insight). "
+    "Do NOT restate every number or list records in text - a rich interactive "
+    "UI (cards, charts, tables) is generated automatically from your tool "
+    "results and shown below your text. Just make the right tool calls and "
+    "write the brief insight."
+)
+
+A2UI_GEN_PROMPT = (
+    "You design a screen as an ordered list of ROWS. Each row holds one or "
+    "more display elements; Python turns your rows into the final UI, so you "
+    "only choose the rows, the elements, and their content - not any layout "
+    "mechanics.\n\n"
+    "Answer the user's SPECIFIC question - the screen is the visual form of "
+    "the assistant's written answer. Show only what's relevant: if they "
+    "asked for a status breakdown, show the status chart, not every "
+    "breakdown. Only show a broad multi-chart dashboard when the user asks "
+    "for an overview / everything / session start (the tool payload contains "
+    "many breakdowns as CONTEXT, not a mandate to chart all of them).\n\n"
+    "TRUST (important): prefer binding data by REFERENCE so the trusted "
+    "raw data is shown, not numbers you retyped. For a chart set 'dataRef' "
+    "to one of the TRUSTED dataRef paths listed below; for a kpi set "
+    "'valueRef' to one of the TRUSTED scalar paths. When you bind by "
+    "reference, DO NOT also fill data/xKey/series (chart) or value (kpi) - "
+    "Python fills them from the real data and marks the visual trusted. "
+    "Only if NO listed path fits should you provide inline data/value "
+    "yourself; that visual is then shown as AI-generated (untrusted). "
+    "Never invent a path that isn't listed.\n\n"
+    "Element types:\n"
+    "- markdown: short narration/insight text (markdown ok). Good as the "
+    "first row.\n"
+    "- kpi: a headline number tile - 'label' (what it is) + a 'valueRef' "
+    "path (preferred) OR an inline 'value' string. One kpi per metric "
+    "(Total, Past Due, Critical, ...); put several kpis in ONE row.\n"
+    "- chart: 'chartType' donut/pie for yes-no or small categorical splits, "
+    "bar for category counts, horizontalBar for a ranked list, line for a "
+    "month-by-month trend. 'title' + a 'dataRef' path (preferred). Only if "
+    "no path fits, provide inline 'xKey'/'series'/'data'. For a list-shaped "
+    "dataRef you may still set 'xKey'/'series' to name which fields to plot. "
+    "Put up to 2 related charts in one row; give a wide horizontalBar/line "
+    "its own row.\n"
+    "- table: a records table. Include ONLY if the user wanted to see "
+    "individual findings AND get_vulnerability_records was called - Python "
+    "fills in the rows, you just add an empty table element (optional "
+    "'title').\n"
+    "- download: a CSV download button - Python fills the URL from the "
+    "summary export; add an empty download element (optional 'label').\n"
+    "- filter: the refine-results panel - Python fills the fields; add an "
+    "empty filter element. Include it when showing a summary/dashboard the "
+    "user may want to narrow.\n\n"
+    "PLACEMENT RULES (enforced by Python, but design for them): markdown, "
+    "kpi, and chart elements may share a row. A table, a download, and a "
+    "filter each get their OWN row and must NOT be combined with anything "
+    "else - put each in a row by itself, typically near the end (charts/kpis "
+    "first, then table, then download, then filter).\n\n"
+    "Convert breakdown maps like {\"Critical\": 3, \"High\": 7} into chart "
+    "data [{\"label\":\"Critical\",\"value\":3},{\"label\":\"High\","
+    "\"value\":7}] with xKey 'label' and series ['value']. Only use data "
+    "present below.\n\n"
+)
+
+
+def _as_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(block.get("text", str(block)))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _iter_tool_calls(messages: list[BaseMessage]):
+    results_by_id = {
+        m.tool_call_id: _as_text(m.content) for m in messages if isinstance(m, ToolMessage)
+    }
+    for m in messages:
+        if not isinstance(m, AIMessage):
+            continue
+        for call in m.tool_calls:
+            yield call["name"], call["args"], results_by_id.get(call["id"], "")
+
+
+def _latest_result(messages: list[BaseMessage], tool_name: str) -> dict | None:
+    payload: dict | None = None
+    for name, _, result_text in _iter_tool_calls(messages):
+        if name != tool_name:
+            continue
+        try:
+            payload = json.loads(result_text)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return payload
+
+
+def _turn_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    boundary = len(messages)
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            boundary = i
+            break
+    return messages[boundary:]
+
+
+def _collect_tool_data(turn: list[BaseMessage]) -> dict[str, Any]:
+    """This turn's tool results, keyed by tool name (verbatim)."""
+    data: dict[str, Any] = {}
+    for tool_name in _DATA_TOOLS:
+        payload = _latest_result(turn, tool_name)
+        if payload is not None:
+            data[tool_name] = payload
+    return data
+
+
+def _user_query(turn: list[BaseMessage]) -> str:
+    """The user request that opened this turn (the sentinel is mapped to
+    a plain-English intent so the UI generator treats it as 'welcome
+    me' rather than charting a literal action string)."""
+    for m in turn:
+        if isinstance(m, HumanMessage):
+            text = _as_text(m.content).strip()
+            if text == "[UI_ACTION session_start]":
+                return (
+                    "Session start: welcome me and give an overview of the "
+                    "vulnerabilities I can access."
+                )
+            return text
+    return ""
+
+
+def _assistant_text(turn: list[BaseMessage]) -> str:
+    """The assistant's final text reply this turn (its written answer)."""
+    for m in reversed(turn):
+        if isinstance(m, AIMessage):
+            text = _as_text(m.content).strip()
+            if text:
+                return text
+    return ""
+
+
+def _applied_filters(turn: list[BaseMessage]) -> dict[str, Any]:
+    """The filter values behind this turn's latest summary call, mapped to
+    filter-panel field names - so an injected filter element shows the
+    currently-applied selection. Read from the tool call ARGUMENTS, which
+    trusted code controls, not from anything the model restated."""
+    args: dict[str, Any] = {}
+    for name, call_args, _ in _iter_tool_calls(turn):
+        if name == "get_vulnerability_summary":
+            args = call_args or {}
+    values: dict[str, Any] = {}
+    for arg_name, field_name in ARG_TO_FILTER_FIELD.items():
+        value = args.get(arg_name)
+        if value not in (None, "", [], False):
+            values[field_name] = value
+    return values
+
+
+async def _generate_a2ui(
+    tool_data: dict[str, Any],
+    applied_filters: dict[str, Any],
+    user_query: str,
+    assistant_text: str,
+    llm: ChatOpenAI,
+) -> list[dict] | None:
+    """Have the LLM produce a ROW LAYOUT answering the user's question,
+    then deterministically compile it (enforcing placement rules and
+    injecting trusted table/download/filter data) into the a2ui message
+    list. Returns None if nothing renderable resulted / the call failed
+    (the frontend keeps its previous surface)."""
+    if not tool_data:
+        return None
+    chart_paths, scalar_paths = bindable_paths(tool_data)
+    context = (
+        f"User question: {user_query}\n\n"
+        f"Assistant's written answer (the screen reinforces THIS, nothing "
+        f"broader): {assistant_text}\n\n"
+        f"TRUSTED dataRef paths for chart 'dataRef' (path: shape):\n"
+        f"{json.dumps(chart_paths, indent=2, default=str)}\n\n"
+        f"TRUSTED scalar paths for kpi 'valueRef':\n"
+        f"{json.dumps(scalar_paths, default=str)}\n\n"
+        f"Full tool results (context; bind via the paths above, don't copy "
+        f"numbers unless no path fits):\n"
+        f"{json.dumps(tool_data, default=str)}"
+    )
+    try:
+        structured = llm.with_structured_output(Layout, method="function_calling")
+        layout = await structured.ainvoke(A2UI_GEN_PROMPT + context)
+    except Exception:
+        return None
+
+    components = compile_layout(layout, tool_data, applied_filters)
+    if not components:
+        return None
+    return wrap_messages(components)
+
+
+class _AgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    a2ui_messages: list[dict[str, Any]] | None
+
+
+def _build_graph(inner_agent, a2ui_llm: ChatOpenAI) -> StateGraph:
+    async def call_inner(state: _AgentState, config) -> dict:
+        result = await inner_agent.ainvoke({"messages": state["messages"]}, config)
+        new_messages = result["messages"][len(state["messages"]) :]
+        return {"messages": new_messages}
+
+    async def generate_ui(state: _AgentState) -> dict:
+        turn = _turn_messages(state["messages"])
+        tool_data = _collect_tool_data(turn)
+        called_any = any(name in _DATA_TOOLS for name, _, _ in _iter_tool_calls(turn))
+        a2ui_messages = await _generate_a2ui(
+            tool_data, _applied_filters(turn), _user_query(turn), _assistant_text(turn), a2ui_llm
+        )
+        if a2ui_messages is not None:
+            return {"a2ui_messages": a2ui_messages}
+        if called_any:
+            # A data turn that produced nothing renderable - clear stale UI.
+            return {"a2ui_messages": None}
+        return {}
+
+    graph = StateGraph(_AgentState)
+    graph.add_node("inner", call_inner)
+    graph.add_node("generate_ui", generate_ui)
+    graph.set_entry_point("inner")
+    graph.add_edge("inner", "generate_ui")
+    graph.add_edge("generate_ui", END)
+    return graph
+
+
+def _with_injected_identity(tool: BaseTool) -> BaseTool:
+    """Force every access-gated tool call to carry the trusted
+    employee_id, overwriting anything the LLM supplied."""
+    if tool.name not in _IDENTITY_INJECTED_TOOLS:
+        return tool
+
+    async def _call(**kwargs: Any) -> Any:
+        kwargs["employee_id"] = get_current_employee_id()
+        return await tool.ainvoke(kwargs)
+
+    return StructuredTool.from_function(
+        coroutine=_call,
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+    )
+
+
+async def build_agent():
+    mcp_tools = await mcp_client.get_tools()
+    mcp_tools = [_with_injected_identity(t) for t in mcp_tools]
+    inner_agent = create_react_agent(build_llm(), mcp_tools, prompt=SYSTEM_PROMPT)
+    graph = _build_graph(inner_agent, build_a2ui_llm())
+    return graph.compile(checkpointer=MemorySaver())

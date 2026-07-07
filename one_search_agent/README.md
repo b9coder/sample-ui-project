@@ -22,25 +22,51 @@ alongside it - it's purely additive, `dashboard` is unchanged.
   never reshaped, aggregated, or rewritten, plus a synthetic
   `_filters` entry (filter field definitions + this turn's applied
   values, same derivation `_build_dashboard` already does).
-- **`ui_spec`** is a grid layout (rows of components) plus a
-  components list. Each component has a `type` of `chart`, `table`,
-  `markdown`, or `input_form`. `chart`/`table`/`input_form`
-  components carry a `dataRef` - a dotted path into `ui_data` (e.g.
+- **`ui_spec`** is a grid layout (rows of display elements) plus an
+  elements list. Each element has a `type` of `chart`, `table`,
+  `markdown`, `kpi`, `download`, or `input_form`. Every non-markdown
+  element carries a `dataRef` - a dotted path into `ui_data` (e.g.
   `"get_vulnerability_summary.breakdowns.severity_breakdown"`) -
   instead of any embedded values; the frontend resolves the path and
-  binds the real tool data straight to the component (see
-  `one_search_ui/src/declarative/`). Only `markdown` components carry
+  binds the real tool data straight to the element (see
+  `one_search_ui/src/declarative/`). Only `markdown` elements carry
   free text, since they're the one type without a trust claim about
   exactly matching the underlying numbers.
 
-This is intentionally 100% deterministic - no LLM decides the layout
-or touches the data, for the same reason `dashboard` is: an LLM
-choosing which `dataRef` to bind is exactly as failure-prone as an
-LLM emitting the chart data itself, so making the *layout* dynamic via
-an LLM call would reintroduce risk without a reliability upside. Which
-of `dashboard` or `ui_spec`/`ui_data` actually renders is a frontend
-choice (`one_search_ui`'s `VITE_UI_RENDER_MODE`, default
+### Hybrid composer (`COMPOSER_MODE`)
+
+How `ui_spec`'s elements get *chosen and arranged* from `ui_data` is a
+hybrid, set via `COMPOSER_MODE` (see `composers.py`). The DATA always
+flows only by `dataRef` regardless of mode - the choice is purely
+about presentation:
+
+- `deterministic` (default) - an ordered, extensible registry of
+  per-slice composer functions (`DETERMINISTIC_COMPOSERS`). No LLM,
+  fully reliable. Adding support for a new tool = appending one
+  composer function.
+- `llm` - a schema-constrained model call (`COMPOSER_MODEL`) picks and
+  arranges elements every turn. It's handed the exact menu of bindable
+  `dataRef` paths and each element's `dataRef` is validated to resolve
+  before acceptance, so it can only choose presentation, never alter
+  or invent data. Any failure falls back to the deterministic registry
+  for that turn.
+- `hybrid` - deterministic first; the LLM only composes for tool
+  outputs the registry doesn't cover yet (the extension path).
+
+Which of `dashboard` or `ui_spec`/`ui_data` actually renders is a
+frontend choice (`one_search_ui`'s `VITE_UI_RENDER_MODE`, default
 `dashboard`) - the backend always computes and sends both.
+
+## Access & the session-start welcome
+
+Vulnerability queries are scoped per-user by a trusted `X-Employee-Id`
+header (see "Access control" below and `../vulnerability_mcp`'s access
+model). When a fresh conversation opens, the frontend sends a hidden
+`[UI_ACTION session_start]` message; the agent calls `get_user_access`
++ `get_vulnerability_summary` and returns a welcome that summarizes the
+user's access (owned apps, owned infrastructure, delegated access, and
+admin status) plus their scoped vulnerability breakdown, then invites
+them to hone in on a specific space.
 
 ## Setup
 
@@ -56,9 +82,12 @@ Create a `.env` file in this directory:
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_A2UI_MODEL=openai/gpt-4o-mini
 VULN_MCP_PROJECT_DIR=/absolute/path/to/claud-playground
 PYTHON_BIN=python3
+
+# Optional - display-element composer (see "Hybrid composer" above).
+COMPOSER_MODE=deterministic   # deterministic (default) | llm | hybrid
+# COMPOSER_MODEL=openai/gpt-4o-mini   # defaults to OPENROUTER_MODEL
 ```
 
 `VULN_MCP_PROJECT_DIR` must point at the directory that *contains*

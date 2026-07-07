@@ -9,8 +9,25 @@ claud-playground/
 ├── vulnerability_mcp/    # Shared vulnerability data layer + MCP server + download API
 ├── one_search_agent/     # LangGraph agent backend (AG-UI protocol, port 8003)
 ├── one_search_ui/        # React/Vite frontend + Node conversation/lookup APIs (port 5175)
+├── a2ui_agent/           # A2UI-first agent: LLM generates the UI (AG-UI, port 8004)
+├── a2ui_ui/              # React frontend rendering agent-generated a2ui.org UI (port 5176)
 └── vulnerabilities.db    # Local SQLite DB (created by seed_data.py)
 ```
+
+Two interchangeable agent+frontend pairs sit on top of the same
+`vulnerability_mcp` server, as different takes on agent-driven UI:
+
+- **`one_search_*`** - the agent returns a declarative UI spec
+  (typed display elements bound to trusted MCP data by reference); the
+  React app renders it with shadcn/ui. Deterministic by default, with
+  optional LLM element selection. Data is never LLM-authored.
+- **`a2ui_*`** - the agent's LLM **generates the entire UI** each turn
+  as an [a2ui.org](https://a2ui.org) component tree, rendered by the
+  real `@a2ui/react` library over AG-UI. The canonical "agent designs
+  the interface" approach. See `a2ui_agent/README.md`.
+
+Both reuse the same MCP server, access model, and identity header, so
+they run side by side without conflict.
 
 ## Prerequisites
 
@@ -27,9 +44,13 @@ python3 -m vulnerability_mcp.seed_data
 ```
 
 Creates `vulnerabilities.db` in this directory (5,000 sample
-vulnerabilities + application/user reference tables). Safe to re-run -
+vulnerabilities + application/user reference tables + a demo access
+model: `user_delegations` and `iiq_group_members`). Safe to re-run -
 skips if data already exists; delete `vulnerabilities.db` first for a
-clean reseed.
+clean reseed. It prints a set of demo ECNs to try as an identity - set
+one as `VITE_DEV_EMPLOYEE_ID` in `one_search_ui/.env` to log in as that
+user (owned apps, delegated access, or admin). See the "Access control"
+section below.
 
 ## 2. Start the MCP server
 
@@ -152,11 +173,30 @@ independently per resource. See:
 
 An Okta-validating gateway in front of this app can forward a trusted
 `X-Employee-Id` header on requests to the agent backend; when present,
-`vulnerability_mcp` restricts results to vulnerabilities for
-applications that employee owns. See `one_search_agent/identity.py`
-and `vulnerability_mcp/repository/vulnerability_repository.py`'s
-access-control clause. Omitting the header returns unrestricted
-results (the default for local dev).
+`vulnerability_mcp` scopes every query to the union of what that user
+may see: applications they own, infrastructure they own, access
+delegated to them by other users (`user_delegations`), and - for
+members of an admin IIQ group (`iiq_group_members`) - everything. See
+`vulnerability_mcp/README.md`'s "Access model" section,
+`one_search_agent/identity.py`, and
+`vulnerability_mcp/repository/vulnerability_repository.py`'s
+access-control clause. Omitting the header returns unrestricted results
+(the default for local dev).
+
+In local dev, set `VITE_DEV_EMPLOYEE_ID` in `one_search_ui/.env` to a
+seeded ECN to log in as that user - the frontend sends it as
+`X-Employee-Id` on every request. On opening a fresh conversation the
+app greets the user with a summary of their access (by apps, delegation,
+and admin) and a scoped vulnerability breakdown, then invites them to
+explore a specific space.
+
+The agent assembles the on-screen response from typed **display
+elements** (markdown, charts, tables, KPI tiles, a download row, and a
+filter panel) described as JSON and rendered by the frontend. Element
+selection is deterministic by default but can be delegated to an LLM
+(`COMPOSER_MODE` in `one_search_agent/.env`); either way, chart/table
+data is bound only by reference to verbatim MCP tool output, never
+reshaped. See `one_search_agent/README.md`'s "Hybrid composer" section.
 
 ## Testing
 

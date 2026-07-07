@@ -27,6 +27,11 @@ const DEFAULT_NAME = "New conversation";
 // _build_ui_data/_build_ui_spec docstring) - this only picks which
 // one this frontend build renders.
 const UI_RENDER_MODE = import.meta.env.VITE_UI_RENDER_MODE === "declarative" ? "declarative" : "dashboard";
+// Hidden sentinel the app sends once when a fresh conversation opens,
+// so the agent can greet the user with their access summary (see
+// agent.py's SYSTEM_PROMPT "Session start" section). No user bubble is
+// shown for it.
+const SESSION_START = "[UI_ACTION session_start]";
 
 function ReasoningStepView({ step }: { step: ReasoningStep }) {
   const isTruncatable = step.result && step.result.length > RESULT_PREVIEW_LIMIT;
@@ -84,6 +89,9 @@ export default function App() {
   const lastRowRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
   const activeIdRef = useRef<string | null>(null);
+  // Conversations already greeted with the session-start welcome this
+  // app session, so switching back and forth doesn't re-trigger it.
+  const greetedRef = useRef<Set<string>>(new Set());
   // tool_call_id -> {name, args}, so result events (which carry no name,
   // only id) can be matched back to the call that produced them.
   const toolCallById = useRef(new Map<string, { name: string; args: Record<string, unknown> }>());
@@ -128,6 +136,22 @@ export default function App() {
   useEffect(() => {
     if (activeId) saveMessages(activeId, messages);
   }, [activeId, messages]);
+
+  // Greet on a freshly-opened, empty conversation: fire the hidden
+  // session_start once so the agent welcomes the user with their
+  // access summary. Guarded by greetedRef so re-renders / switching
+  // back don't repeat it, and skipped entirely once any message exists.
+  useEffect(() => {
+    if (!activeId || loading) return;
+    if (messages.length > 0) {
+      greetedRef.current.add(activeId);
+      return;
+    }
+    if (greetedRef.current.has(activeId)) return;
+    greetedRef.current.add(activeId);
+    void sendMessage(SESSION_START);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, messages.length, loading]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
@@ -174,7 +198,12 @@ export default function App() {
     if (!text || loading) return;
     const conversationId = activeIdRef.current;
 
-    setMessages((prev) => [...prev, makeMessage("user", displayText ?? text)]);
+    // The session-start sentinel is a system prompt to the agent, not a
+    // user utterance - send it to the agent but show no user bubble.
+    const hideUserBubble = text === SESSION_START;
+    if (!hideUserBubble) {
+      setMessages((prev) => [...prev, makeMessage("user", displayText ?? text)]);
+    }
     setInput("");
     setLoading(true);
 
@@ -245,7 +274,7 @@ export default function App() {
       setLoading(false);
     }
 
-    if (conversationId) {
+    if (conversationId && !hideUserBubble) {
       const conversation = conversations.find((c) => c.id === conversationId);
       if (conversation && conversation.name === DEFAULT_NAME) {
         const autoName = text.length > 60 ? text.slice(0, 60) + "…" : text;

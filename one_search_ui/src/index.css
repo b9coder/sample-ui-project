@@ -1,3 +1,81 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+/* Tailwind v4 + shadcn/ui dark theme. Dark is the only mode this app
+   ships (matches the existing near-black chat UI). Design tokens are
+   exposed as CSS variables and mapped into Tailwind's color system via
+   @theme inline so shadcn components (which reference bg-background,
+   text-foreground, border-border, etc.) resolve correctly. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: oklch(0.16 0.004 285);
+  --foreground: oklch(0.97 0 0);
+  --card: oklch(0.19 0.004 285);
+  --card-foreground: oklch(0.97 0 0);
+  --popover: oklch(0.19 0.004 285);
+  --popover-foreground: oklch(0.97 0 0);
+  --primary: oklch(0.62 0.19 260);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.27 0.006 285);
+  --secondary-foreground: oklch(0.97 0 0);
+  --muted: oklch(0.27 0.006 285);
+  --muted-foreground: oklch(0.71 0.005 285);
+  --accent: oklch(0.27 0.006 285);
+  --accent-foreground: oklch(0.97 0 0);
+  --destructive: oklch(0.63 0.21 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.27 0.006 285);
+  --input: oklch(0.27 0.006 285);
+  --ring: oklch(0.62 0.19 260);
+  --radius: 0.6rem;
+
+  /* Chart palette - severity-aligned and categorical. */
+  --chart-1: oklch(0.62 0.19 260);
+  --chart-2: oklch(0.7 0.15 160);
+  --chart-3: oklch(0.7 0.16 55);
+  --chart-4: oklch(0.65 0.2 15);
+  --chart-5: oklch(0.68 0.16 300);
+
+  --sidebar: oklch(0.14 0.004 285);
+  --sidebar-foreground: oklch(0.97 0 0);
+  --sidebar-border: oklch(0.25 0.006 285);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
 :root {
   color-scheme: dark;
 }
@@ -8,7 +86,8 @@
 
 body {
   margin: 0;
-  background: #0d0d0f;
+  background: var(--background);
+  color: var(--foreground);
 }
 
 #root {

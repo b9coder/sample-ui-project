@@ -1,0 +1,471 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d0d0f;
+  --surface: #1a1a1c;
+  --border: #2e2e31;
+  --text: #ececec;
+  --muted: #9b9ba1;
+  --primary: #6d8bff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 5;
+}
+.app-brand {
+  font-weight: 600;
+  font-size: 15px;
+}
+.app-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+}
+
+.row {
+  display: flex;
+}
+.row.user {
+  justify-content: flex-end;
+}
+.row.assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  background: var(--primary);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 14px 14px 2px 14px;
+  max-width: 70%;
+  font-size: 14px;
+}
+
+.assistant {
+  width: 100%;
+}
+.assistant-text {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.assistant-text > :first-child {
+  margin-top: 0;
+}
+.assistant-text > :last-child {
+  margin-bottom: 0;
+}
+.assistant-text p {
+  margin: 0 0 8px;
+}
+.assistant-text h1,
+.assistant-text h2,
+.assistant-text h3,
+.assistant-text h4 {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.assistant-text ul,
+.assistant-text ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.assistant-text li {
+  margin: 2px 0;
+}
+.assistant-text strong {
+  font-weight: 600;
+}
+.assistant-text code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 13px;
+}
+.assistant-text a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* A2UI surface wrapper - the a2ui components carry their own inline
+   styles; this just sets the surrounding spacing and a dark palette
+   via CSS variables the basicCatalog reads. */
+.a2ui-surface {
+  --a2ui-color-surface: var(--surface);
+  --a2ui-color-on-surface: var(--text);
+  --a2ui-border: 1px solid var(--border);
+  --a2ui-border-radius: 12px;
+  --a2ui-spacing-m: 14px;
+  --a2ui-card-background: var(--surface);
+  --a2ui-card-box-shadow: none;
+}
+.a2ui-error {
+  color: #f87171;
+  font-size: 13px;
+}
+
+/* Visualization header: title on the left, trust badge on the right. */
+.a2ui-viz-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Trust badge - shown on data-bearing visualizations. */
+.a2ui-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.a2ui-trust-verified {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+.a2ui-trust-ai {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+}
+.a2ui-trust-icon {
+  font-size: 11px;
+}
+
+/* KPI footer row (label + trust badge). */
+.a2ui-kpi-foot {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Custom Markdown block. */
+.a2ui-markdown {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.a2ui-markdown > :first-child {
+  margin-top: 0;
+}
+.a2ui-markdown > :last-child {
+  margin-bottom: 0;
+}
+.a2ui-markdown h1,
+.a2ui-markdown h2,
+.a2ui-markdown h3,
+.a2ui-markdown h4 {
+  font-size: 16px;
+  margin: 10px 0 6px;
+}
+.a2ui-markdown ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.a2ui-markdown p {
+  margin: 6px 0;
+}
+
+/* Custom shared button. */
+.a2ui-btn {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.a2ui-btn:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+.a2ui-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.a2ui-btn.primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  font-weight: 600;
+}
+
+/* Custom interactive Table. */
+.a2ui-table {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+.a2ui-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.a2ui-table-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.a2ui-table-scroll {
+  overflow-x: auto;
+}
+.a2ui-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.a2ui-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.a2ui-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.a2ui-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.a2ui-table-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Custom interactive Filter panel. */
+.a2ui-filter {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.a2ui-filter-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.a2ui-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+.a2ui-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.a2ui-filter-field label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.a2ui-filter-field input[type="text"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.a2ui-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.a2ui-chip {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.a2ui-chip.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.a2ui-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* Custom Kpi tile - big value + label, in its own card. */
+.a2ui-kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.a2ui-kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.a2ui-kpi-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Custom DownloadLink component - a clickable button. */
+.a2ui-download-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--primary);
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 10px;
+  transition: opacity 0.15s;
+}
+.a2ui-download-link:hover {
+  opacity: 0.9;
+}
+.a2ui-download-icon {
+  font-size: 15px;
+}
+
+/* Custom Chart component styling. */
+.a2ui-chart {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 0;
+}
+.a2ui-chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.a2ui-chart-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 20px;
+  text-align: center;
+}
+
+.input-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.input-bar textarea {
+  flex: 1;
+  resize: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  max-height: 160px;
+}
+.input-bar button {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 0 18px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.input-bar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.typing {
+  display: flex;
+  gap: 5px;
+  padding: 10px 0;
+}
+.typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: blink 1.4s infinite both;
+}
+.typing span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
+}

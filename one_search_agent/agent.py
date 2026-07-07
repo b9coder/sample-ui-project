@@ -22,36 +22,36 @@ with zero extra protocol wiring - no LLM call, no validation, no
 leak risk, and it's wrong only if the underlying tool data is wrong.
 
 In addition to `dashboard`, every turn also gets a declarative UI
-description in the `ui_spec`/`ui_data` state keys (see
-`_build_ui_data`/`_build_ui_spec`) - a generic, renderer-agnostic
-alternative to `dashboard` that strictly separates presentation from
-trusted data:
+description in the `ui_spec`/`ui_data` state keys - a generic,
+renderer-agnostic alternative to `dashboard` that strictly separates
+presentation from trusted data:
 
 - `ui_data` is a registry of this turn's MCP tool results, copied
   VERBATIM (see `_build_ui_data`) - never reshaped, aggregated, or
   rewritten, so it's exactly as trustworthy as the tool that produced
   it.
-- `ui_spec` (see `_build_ui_spec`) is a layout (rows of components)
-  plus a components list, where every `chart`/`table` component
-  references its data via a `dataRef` STRING (a dotted path into
-  `ui_data`, e.g. "get_vulnerability_summary.breakdowns.
-  severity_breakdown") rather than embedding any values - the
-  component only carries presentation metadata (chart type, which
-  field names to plot, column labels). The frontend resolves each
-  `dataRef` and binds the real tool data directly (see
-  one_search_ui/src/declarative/). `markdown` components are the only
-  place free-text/AI-influenced content belongs, since they don't
-  carry a trust claim about matching the underlying numbers exactly.
+- `ui_spec` (see composers.py) is a layout (rows of typed display
+  elements: markdown / chart / table / kpi / download / input_form),
+  where every non-markdown element references its data via a `dataRef`
+  STRING (a dotted path into `ui_data`, e.g.
+  "get_vulnerability_summary.breakdowns.severity_breakdown") rather
+  than embedding any values - the element only carries presentation
+  metadata (chart type, which field names to plot, column labels). The
+  frontend resolves each `dataRef` and binds the real tool data
+  directly (see one_search_ui/src/declarative/). `markdown` elements
+  are the only place free-text/AI-influenced content belongs, since
+  they don't carry a trust claim about matching the underlying numbers
+  exactly.
 
-This is built 100% deterministically, same as `dashboard` - no LLM is
-involved in either the data extraction or the layout decision, by
-design: an LLM choosing which dataRef paths exist is just as failure-
-prone as an LLM emitting raw chart data, so there is no robustness
-benefit to making the LAYOUT dynamic via an LLM call here, only risk.
-Both `dashboard` and `ui_spec`/`ui_data` are populated every turn from
-the same tool results - `dashboard` is untouched for full backward
-compatibility, and `ui_spec`/`ui_data` is the new, more general
-representation the frontend can adopt incrementally.
+How elements get CHOSEN and ARRANGED is a hybrid, configured via the
+COMPOSER_MODE env var (see composers.py for the full design):
+"deterministic" (default) uses an ordered, extensible registry of
+per-tool composer functions; "llm" lets a schema-constrained model
+call pick/arrange elements (dataRef-validated, deterministic fallback
+on any failure); "hybrid" is deterministic-first with the LLM only
+composing for tool outputs the registry doesn't cover yet. In every
+mode the data itself flows only by dataRef - the composer choice is
+purely about presentation.
 """
 from __future__ import annotations
 
@@ -71,6 +71,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
+from composers import compose_ui_spec
 from identity import get_current_employee_id
 
 load_dotenv()
@@ -79,6 +80,16 @@ PROJECT_DIR = os.environ.get(
     "VULN_MCP_PROJECT_DIR", "/Users/nilesh/Documents/projects/claud-playground"
 )
 PYTHON_BIN = os.environ.get("PYTHON_BIN", "python3")
+
+# How ui_spec's display elements get chosen/arranged from the trusted
+# ui_data registry (the DATA always flows by dataRef regardless):
+#   "deterministic" (default) - the ordered composer registry only.
+#   "llm"                     - a schema-constrained model call every turn.
+#   "hybrid"                  - deterministic first, LLM only for tool
+#                               outputs the registry doesn't cover yet.
+# See composers.py.
+COMPOSER_MODE = os.environ.get("COMPOSER_MODE", "deterministic").strip().lower()
+COMPOSER_MODEL = os.environ.get("COMPOSER_MODEL") or os.environ.get("OPENROUTER_MODEL")
 
 mcp_client = MultiServerMCPClient(
     {
@@ -236,6 +247,12 @@ SYSTEM_PROMPT = (
     "business units/owners.\n"
     "- get_remediation_trend: month-by-month discovered/remediated/"
     "past-due/escalated counts, for trend-over-time questions.\n"
+    "- get_user_access: the CURRENT authenticated user's own vulnerability "
+    "visibility - applications they own, infrastructure they own, access "
+    "delegated to them by other users, and any admin IIQ group that lets "
+    "them see everything. Use it for the session-start welcome (see "
+    "below) and whenever the user asks what they can see / what they have "
+    "access to.\n"
     "- resolve_application / resolve_user: fuzzy-match a free-text "
     "application or person reference to a canonical id, when the user "
     "names something that isn't already an exact known identifier "
@@ -296,6 +313,29 @@ SYSTEM_PROMPT = (
     "on-screen KPI/chart dashboard and (when relevant) records table are "
     "built automatically from these tool calls' actual results, not from "
     "anything you write, so they need real data to draw from.\n\n"
+    "## Session start (the welcome message)\n"
+    "When you receive a message that is exactly '[UI_ACTION session_start]' "
+    "(the app sends this once, automatically, when a fresh conversation "
+    "opens), treat it as: greet the user and summarize their access. Call "
+    "get_user_access FIRST, then write a short, warm welcome that covers, "
+    "in plain language: (1) the applications they own and how many findings "
+    "those carry, (2) any infrastructure they own, (3) any access delegated "
+    "to them by other people (name the delegators and the scope), and (4) "
+    "whether they hold admin access to everything. Then invite them to hone "
+    "in on a specific space to explore further (e.g. 'ask me about a "
+    "specific application, your past-due findings, or your riskiest "
+    "assets'). ALSO call get_vulnerability_summary ONCE with NO filters "
+    "on session start (right after get_user_access) so the user "
+    "immediately sees a breakdown of the vulnerabilities they can access "
+    "- the KPI tiles and severity/internet-facing/past-due/exploitable/"
+    "platform charts render automatically from it, scoped to their "
+    "access. Keep your text to a few friendly sentences/bullets - the "
+    "detailed access breakdown and the vulnerability breakdown charts "
+    "are rendered automatically on screen, so don't restate the numbers "
+    "in text. If "
+    "get_user_access comes back authenticated=false, tell the user no "
+    "signed-in identity was detected so they're seeing unrestricted local "
+    "data, and still offer to help them explore.\n\n"
     "## Response structure\n"
     "For EVERY new search or filter refinement, your ENTIRE text reply is "
     "just one thing:\n\n"
@@ -587,6 +627,7 @@ def _build_records_table(turn_messages: list[BaseMessage]) -> dict | None:
 # keyed by tool name - the full set of dataRef "namespaces" available
 # to ui_spec's components.
 _UI_DATA_TOOLS = (
+    "get_user_access",
     "get_vulnerability_summary",
     "get_vulnerability_records",
     "get_risk_ranking",
@@ -660,179 +701,6 @@ def _build_ui_data(turn_messages: list[BaseMessage]) -> dict[str, Any] | None:
     return registry or None
 
 
-# Declarative-table column definitions for get_vulnerability_records -
-# unlike TABLE_COLUMNS/_RECORD_FIELD_MAP above, "key" here is the RAW
-# field name verbatim from the tool's record objects (e.g.
-# "application_name", not "application") - the table component binds
-# straight to ui_data without any field renaming, per the "pass trusted
-# data to the UI without modification" rule. Only "label" (the
-# column header text) is presentation metadata.
-_RECORD_TABLE_COLUMNS: list[dict[str, str]] = [
-    {"key": "hostname", "label": "Hostname"},
-    {"key": "application_name", "label": "Application"},
-    {"key": "severity", "label": "Severity"},
-    {"key": "cve_id", "label": "CVE"},
-    {"key": "past_due_flag", "label": "Past Due"},
-    {"key": "escalated_flag", "label": "Escalated"},
-    {"key": "operating_system", "label": "OS"},
-    {"key": "application_owner", "label": "Owner"},
-    {"key": "due_date", "label": "Due Date"},
-    {"key": "internet_facing", "label": "Internet Facing"},
-]
-
-
-def _build_ui_spec(ui_data: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Layout (rows of components) + a components list for the
-    declarative rendering model. Every chart/table component carries a
-    "dataRef" STRING - a dotted path into `ui_data` (e.g.
-    "get_vulnerability_summary.breakdowns.severity_breakdown" or
-    "get_vulnerability_records.records") - never any actual values;
-    the frontend resolves each dataRef and binds the real (unmodified)
-    tool data straight to the chart/table. "chart" config only
-    declares presentation metadata (chart type, which field NAMES to
-    plot) - never data. The one exception is "markdown" components,
-    whose text is free-form by design (here it's still deterministic,
-    built straight from trusted numbers - see the inline comment below
-    - but the type permits AI-authored text too, since unlike chart/
-    table it carries no claim of being a verbatim data binding).
-
-    Built 100% from `ui_data`'s already-trusted registry - no LLM call,
-    same reasoning as `_build_dashboard`.
-    """
-    if not ui_data:
-        return None
-
-    summary = ui_data.get("get_vulnerability_summary")
-    records = ui_data.get("get_vulnerability_records")
-    ranking = ui_data.get("get_risk_ranking")
-    trend = ui_data.get("get_remediation_trend")
-
-    summary_total = (summary.get("summary") or {}).get("total_vulnerabilities", 0) if summary else 0
-    has_summary = summary is not None and summary_total > 0
-    has_records = bool(records and records.get("records"))
-    has_ranking = bool(ranking and ranking.get("ranking"))
-    has_trend = bool(trend and trend.get("trend"))
-    if not has_summary and not has_records and not has_ranking and not has_trend:
-        return None
-
-    components: list[dict[str, Any]] = []
-    rows: list[dict[str, Any]] = []
-
-    if has_summary:
-        breakdowns = summary.get("breakdowns") or {}
-        severity = breakdowns.get("severity_breakdown") or {}
-
-        components.append({
-            "id": "kpi_summary", "type": "kpi",
-            "dataRef": "_kpis",
-        })
-        rows.append({"columns": [{"componentId": "kpi_summary", "width": 4}]})
-
-        # All 4 donuts share one row (matches legacy Dashboard.tsx,
-        # which groups every donut/pie-typed chart together regardless
-        # of source) - bar charts each get their own full-width row.
-        donut_ids = []
-        if severity:
-            components.append({
-                "id": "severity_chart", "type": "chart", "title": "Findings by Severity",
-                "dataRef": "get_vulnerability_summary.breakdowns.severity_breakdown",
-                "chart": {"chartType": "donut"},
-            })
-            donut_ids.append("severity_chart")
-        if breakdowns.get("internet_facing_breakdown"):
-            components.append({
-                "id": "internet_facing_chart", "type": "chart", "title": "Internet Facing",
-                "dataRef": "get_vulnerability_summary.breakdowns.internet_facing_breakdown",
-                "chart": {"chartType": "donut"},
-            })
-            donut_ids.append("internet_facing_chart")
-        if "_past_due_breakdown" in ui_data:
-            components.append({
-                "id": "past_due_chart", "type": "chart", "title": "Past Due",
-                "dataRef": "_past_due_breakdown",
-                "chart": {"chartType": "donut"},
-            })
-            donut_ids.append("past_due_chart")
-        if "_exploitable_breakdown" in ui_data:
-            components.append({
-                "id": "exploitable_chart", "type": "chart", "title": "Exploitable",
-                "dataRef": "_exploitable_breakdown",
-                "chart": {"chartType": "donut"},
-            })
-            donut_ids.append("exploitable_chart")
-        if donut_ids:
-            rows.append({"columns": [{"componentId": cid, "width": 1} for cid in donut_ids]})
-
-        # Same severity dataRef as the donut above, just charted as a
-        # bar too - no new/different data, only a second presentation
-        # of the identical trusted breakdown.
-        if severity:
-            components.append({
-                "id": "severity_bar_chart", "type": "chart", "title": "Inherent Risk Count",
-                "dataRef": "get_vulnerability_summary.breakdowns.severity_breakdown",
-                "chart": {"chartType": "bar"},
-            })
-            rows.append({"columns": [{"componentId": "severity_bar_chart", "width": 4}]})
-
-        if breakdowns.get("finding_category_breakdown"):
-            components.append({
-                "id": "platform_chart", "type": "chart", "title": "Findings by Platform",
-                "dataRef": "get_vulnerability_summary.breakdowns.finding_category_breakdown",
-                "chart": {"chartType": "bar"},
-            })
-            rows.append({"columns": [{"componentId": "platform_chart", "width": 4}]})
-
-    if has_ranking:
-        components.append({
-            "id": "ranking_chart", "type": "chart",
-            "title": f"Top {ranking.get('dimension', 'application')} by risk",
-            "dataRef": "get_risk_ranking.ranking",
-            "chart": {"chartType": "horizontalBar", "xKey": "name", "series": ["risk_score"]},
-        })
-        rows.append({"columns": [{"componentId": "ranking_chart", "width": 4}]})
-
-    if has_trend:
-        components.append({
-            "id": "trend_chart", "type": "chart", "title": "Remediation Trend",
-            "dataRef": "get_remediation_trend.trend",
-            "chart": {
-                "chartType": "line", "xKey": "month",
-                "series": ["discovered", "remediated", "past_due", "escalated"],
-            },
-        })
-        rows.append({"columns": [{"componentId": "trend_chart", "width": 4}]})
-
-    if has_records:
-        components.append({
-            "id": "records_table", "type": "table", "title": "Matching Vulnerabilities",
-            "dataRef": "get_vulnerability_records.records",
-            "columns": _RECORD_TABLE_COLUMNS,
-        })
-        rows.append({"columns": [{"componentId": "records_table", "width": 4}]})
-
-    # Own full-width row, after every chart/table but before the
-    # filter form - matches the legacy Dashboard.tsx's DownloadCard
-    # placement. "export" already exists verbatim inside the summary
-    # tool's own payload (file_name/download_url/record_count) - no
-    # new synthetic ui_data entry needed, just a dataRef straight into it.
-    if has_summary and (summary.get("export") or {}).get("download_url"):
-        components.append({
-            "id": "download_card", "type": "download",
-            "title": "Download Vulnerability Report",
-            "dataRef": "get_vulnerability_summary.export",
-        })
-        rows.append({"columns": [{"componentId": "download_card", "width": 4}]})
-
-    if has_summary or has_records:
-        components.append({
-            "id": "filters_form", "type": "input_form", "title": "Refine results",
-            "formId": "vulnerability_filters", "dataRef": "_filters",
-        })
-        rows.append({"columns": [{"componentId": "filters_form", "width": 4}]})
-
-    return {"layout": {"rows": rows}, "components": components}
-
-
 class _AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     dashboard: dict[str, Any] | None
@@ -855,13 +723,13 @@ def _turn_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     return messages[boundary:]
 
 
-def _build_graph(inner_agent) -> StateGraph:
+def _build_graph(inner_agent, composer_llm: ChatOpenAI | None = None) -> StateGraph:
     async def call_inner(state: _AgentState, config) -> dict:
         result = await inner_agent.ainvoke({"messages": state["messages"]}, config)
         new_messages = result["messages"][len(state["messages"]) :]
         return {"messages": new_messages}
 
-    def build_dashboard_node(state: _AgentState) -> dict:
+    async def build_dashboard_node(state: _AgentState) -> dict:
         turn = _turn_messages(state["messages"])
 
         if _had_unresolved_entity(turn):
@@ -874,7 +742,13 @@ def _build_graph(inner_agent) -> StateGraph:
         called_records = any(
             name == "get_vulnerability_records" for name, _, _ in _iter_tool_calls(turn)
         )
-        called_any = called_search or called_records
+        # get_user_access (the session-start welcome flow) also produces
+        # a ui_spec but no legacy dashboard/records panel - count it so
+        # its ui_spec isn't cleared as a "pure follow-up".
+        called_access = any(
+            name == "get_user_access" for name, _, _ in _iter_tool_calls(turn)
+        )
+        called_any = called_search or called_records or called_access
 
         # A None result is ambiguous between "this turn never searched
         # at all" (a pure follow-up - keep showing whatever was there
@@ -912,9 +786,11 @@ def _build_graph(inner_agent) -> StateGraph:
         # clear-vs-preserve logic, just keyed off whether ANY relevant
         # tool was called this turn rather than splitting by panel,
         # since a single ui_spec can include both analytics and a
-        # records table together.
+        # records table together. The DATA comes verbatim from tool
+        # results (_build_ui_data); how it's arranged into display
+        # elements is delegated to the configured composer.
         ui_data = _build_ui_data(turn)
-        ui_spec = _build_ui_spec(ui_data)
+        ui_spec = await compose_ui_spec(ui_data, mode=COMPOSER_MODE, llm=composer_llm)
         if ui_spec is not None:
             update["ui_data"] = ui_data
             update["ui_spec"] = ui_spec
@@ -945,6 +821,7 @@ _IDENTITY_INJECTED_TOOLS = {
     "get_vulnerability_records",
     "get_risk_ranking",
     "get_remediation_trend",
+    "get_user_access",
 }
 
 
@@ -982,5 +859,16 @@ async def build_agent():
     mcp_tools = [_with_injected_identity(t) for t in mcp_tools]
     llm = build_llm()
     inner_agent = create_react_agent(llm, mcp_tools, prompt=SYSTEM_PROMPT)
-    graph = _build_graph(inner_agent)
+    # A separate model instance for the composer, only built when a mode
+    # that uses it is configured (deterministic never calls the LLM).
+    composer_llm = (
+        ChatOpenAI(
+            model=COMPOSER_MODEL,
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        )
+        if COMPOSER_MODE in ("llm", "hybrid")
+        else None
+    )
+    graph = _build_graph(inner_agent, composer_llm=composer_llm)
     return graph.compile(checkpointer=MemorySaver())
