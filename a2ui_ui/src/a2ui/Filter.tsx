@@ -6,6 +6,20 @@ import { z } from "zod";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
 import { useApplyFilters } from "./ApplyFiltersContext";
+import type { ElementMeta } from "./manifest";
+
+// Authoring contract + metadata for the filter panel. Fields/values are
+// server-injected from the "filter_schema" data binding; the LLM just
+// requests the element (no authoring props).
+export const filterElementSchema = z.object({});
+
+export const filterMeta: ElementMeta = {
+  type: "filter",
+  component: "Filter",
+  placement: "solo",
+  dataRefProps: [],
+  dataBinding: "filter_schema",
+};
 
 export interface FilterField {
   name: string;

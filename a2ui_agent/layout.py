@@ -21,29 +21,36 @@ markdown narration - just not the low-level tree mechanics.
 """
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
 from a2ui_schema import ROOT_ID
+from catalog_manifest import CatalogManifest, load_manifest
+from data_providers import DATA_PROVIDERS
 
-# --- Filter panel definition (static; injected into filter elements) ---
-# Kept simple/self-contained - a2ui_ui has no entity-lookup API, so no
-# searchable dropdowns here (unlike one_search_ui).
-FILTER_FIELDS: list[dict[str, Any]] = [
-    {"name": "severity", "label": "Severity", "component": "multiSelect",
-     "options": ["Critical", "High", "Medium", "Low"]},
-    {"name": "environment", "label": "Environment", "component": "multiSelect",
-     "options": ["Production", "Staging", "Development"]},
-    {"name": "operatingSystem", "label": "Operating System", "component": "multiSelect",
-     "options": ["RHEL 8", "Ubuntu 22.04", "Windows Server 2019", "Windows Server 2022",
-                 "AIX 7.2", "Solaris 11"]},
-    {"name": "businessUnit", "label": "Business Unit", "component": "text"},
-    {"name": "region", "label": "Region", "component": "text"},
-    {"name": "isPastDue", "label": "Past Due", "component": "checkbox"},
-    {"name": "isEscalated", "label": "Escalated", "component": "checkbox"},
-    {"name": "internetFacing", "label": "Internet Facing", "component": "checkbox"},
-]
+logger = logging.getLogger(__name__)
+
+# The catalog manifest is the UI-owned contract (see catalog_manifest.py):
+# it names the supported elements and, per element, their placement
+# (solo vs combinable), which authored props are trusted data references,
+# and what server-injected data binding they need. Loaded once at import;
+# compile_layout reads its rules instead of hard-coding them.
+MANIFEST: CatalogManifest = load_manifest()
+
+# Element types this agent's Pydantic Layout schema (below) can currently
+# EMIT. The manifest may advertise more (a UI ahead of the agent) or
+# fewer; check_manifest_consistency() surfaces the drift. Fully removing
+# this hand-maintained set requires generating the Pydantic models from
+# the manifest too (a documented next increment).
+#
+# NOTE: `markdown` is in the manifest (the UI supports it) but the agent
+# deliberately does NOT emit it into the surface - narration already
+# renders as the chat text reply above the surface, so a markdown
+# element there would just duplicate it (and, mixed into a KPI row,
+# squeeze the tiles). The a2ui surface is visual-only here.
+KNOWN_ELEMENT_TYPES = {"kpi", "chart", "table", "download", "filter"}
 
 # Maps get_vulnerability_summary request args to filter field names, so a
 # filter panel can reflect the currently-applied filters.
@@ -58,28 +65,36 @@ ARG_TO_FILTER_FIELD = {
     "is_internet_facing": "internetFacing",
 }
 
-# Records table columns: "key" is the RAW field name from the records
-# tool's rows (bound verbatim, no renaming); "label" is display only.
-RECORD_COLUMNS: list[dict[str, str]] = [
-    {"key": "hostname", "label": "Hostname"},
-    {"key": "application_name", "label": "Application"},
-    {"key": "severity", "label": "Severity"},
-    {"key": "cve_id", "label": "CVE"},
-    {"key": "past_due_flag", "label": "Past Due"},
-    {"key": "escalated_flag", "label": "Escalated"},
-    {"key": "operating_system", "label": "OS"},
-    {"key": "application_owner", "label": "Owner"},
-    {"key": "due_date", "label": "Due Date"},
-    {"key": "internet_facing", "label": "Internet Facing"},
-]
+
+def check_manifest_consistency(manifest: CatalogManifest = MANIFEST) -> None:
+    """Log (don't crash) any drift between the shared manifest and this
+    agent's capabilities, so mismatches are visible at startup."""
+    manifest_types = set(manifest.elements)
+    # A UI ahead of the agent (manifest lists more) is fine - the agent
+    # just doesn't emit those yet; log at INFO. An agent ahead of the UI
+    # (emits something the manifest lacks) IS a problem - the client
+    # can't render it; log at WARNING.
+    if manifest_types - KNOWN_ELEMENT_TYPES:
+        logger.info(
+            "Manifest advertises elements the agent doesn't emit "
+            "(expected if the UI is ahead): %s", manifest_types - KNOWN_ELEMENT_TYPES,
+        )
+    if KNOWN_ELEMENT_TYPES - manifest_types:
+        logger.warning(
+            "Agent can emit elements the manifest doesn't list (UI won't "
+            "render them): %s", KNOWN_ELEMENT_TYPES - manifest_types,
+        )
+    for etype, spec in manifest.elements.items():
+        if spec.data_binding and spec.data_binding not in DATA_PROVIDERS:
+            logger.warning(
+                "Element %r needs data binding %r but no provider is "
+                "registered (data_providers.py)", etype, spec.data_binding,
+            )
 
 
 # --- LLM output schema: rows of typed elements ---
-class MarkdownElement(BaseModel):
-    type: Literal["markdown"]
-    text: str = Field(description="Short narration/insight in markdown.")
-
-
+# (No markdown element on purpose - the surface is visual-only; the
+# narration is the chat text reply. See KNOWN_ELEMENT_TYPES above.)
 class KpiElement(BaseModel):
     type: Literal["kpi"]
     label: str = Field(description="What the number means, e.g. 'Past Due'.")
@@ -140,7 +155,7 @@ class FilterElement(BaseModel):
 
 
 LayoutElement = Union[
-    MarkdownElement, KpiElement, ChartElement, TableElement, DownloadElement, FilterElement
+    KpiElement, ChartElement, TableElement, DownloadElement, FilterElement
 ]
 LayoutElementField = Annotated[LayoutElement, Field(discriminator="type")]
 
@@ -158,18 +173,8 @@ class Layout(BaseModel):
 
 
 # --- Deterministic compiler: Layout -> a2ui component list ---
-# Elements that must occupy their own full-width row, never combined.
-_SOLO_TYPES = {"table", "download", "filter"}
-
-
-def _summary(tool_data: dict[str, Any]) -> dict[str, Any] | None:
-    s = tool_data.get("get_vulnerability_summary")
-    if not s:
-        return None
-    total = (s.get("summary") or {}).get("total_vulnerabilities", 0)
-    return s if total > 0 else None
-
-
+# (Placement rules come from the manifest; data injection from
+# data_providers.py - nothing element-specific is hard-coded here.)
 _MISSING = object()
 
 
@@ -230,14 +235,22 @@ def bindable_paths(tool_data: dict[str, Any]) -> tuple[dict[str, str], list[str]
 
 
 def compile_layout(
-    layout: Layout, tool_data: dict[str, Any], applied_filters: dict[str, Any]
+    layout: Layout,
+    tool_data: dict[str, Any],
+    applied_filters: dict[str, Any],
+    manifest: CatalogManifest = MANIFEST,
 ) -> list[dict[str, Any]] | None:
-    """Turn the LLM's row layout into a valid a2ui component list.
+    """Turn the LLM's row layout into a valid a2ui component list, driven
+    by the shared catalog manifest.
 
-    Enforces the placement rules (solo types get their own row), injects
-    trusted data for table/download/filter, drops elements whose backing
-    data isn't present, and builds the tree so it can never dangle.
-    Returns None if nothing renderable remains.
+    Per element, the manifest supplies: the a2ui component NAME to render
+    as, its PLACEMENT (solo row vs combinable), which authored props are
+    trusted data REFERENCES, and what server-injected DATA BINDING it
+    needs. Data-bound elements are filled by data_providers.py; ref-
+    bearing ones (chart/kpi) resolve their reference to trusted data;
+    everything else passes its authored props straight through. Python
+    still emits all ids/references, so the tree can never dangle. Returns
+    None if nothing renderable remains.
     """
     components: list[dict[str, Any]] = []
     root_children: list[str] = []
@@ -249,17 +262,50 @@ def compile_layout(
         return f"{prefix}_{counter}"
 
     def build_element(el: Any) -> str | None:
-        """Append the a2ui component(s) for one element; return its id, or
-        None if it should be dropped (missing backing data)."""
-        if el.type == "markdown":
-            cid = new_id("md")
-            components.append({"component": "Markdown", "id": cid, "text": el.text})
+        spec = manifest.elements.get(el.type)
+        if spec is None:
+            return None  # element the manifest doesn't define - skip safely
+
+        # 1. Server-injected data binding (table/download/filter, ...).
+        if spec.data_binding:
+            provider = DATA_PROVIDERS.get(spec.data_binding)
+            if provider is None:
+                return None
+            injected = provider(tool_data, applied_filters, el)
+            if injected is None:
+                return None
+            cid = new_id(el.type)
+            components.append({"component": spec.component, "id": cid, **injected})
             return cid
+
+        # 2. Chart: prefer trusted data bound by dataRef; inline fallback.
+        if el.type == "chart":
+            data = xkey = series = None
+            trusted = False
+            if "dataRef" in spec.data_ref_props and el.dataRef:
+                resolved = resolve_ref(tool_data, el.dataRef)
+                if resolved is not _MISSING:
+                    built = _chart_from_ref(resolved, el.xKey, el.series)
+                    if built:
+                        data, xkey, series = built
+                        trusted = True
+            if data is None and el.data:
+                data, xkey, series, trusted = el.data, el.xKey or "label", el.series or ["value"], False
+            if data is None:
+                return None
+            cid = new_id("chart")
+            components.append({
+                "component": spec.component, "id": cid, "chartType": el.chartType,
+                "title": el.title, "xKey": xkey, "series": series,
+                "data": data, "trusted": trusted,
+            })
+            return cid
+
+        # 3. KPI: prefer a trusted scalar valueRef; inline fallback.
         if el.type == "kpi":
-            # Prefer a trusted scalar reference; fall back to inline value.
             value: str | None = None
             trusted = False
-            if el.valueRef:
+            if "valueRef" in spec.data_ref_props and el.valueRef:
                 resolved = resolve_ref(tool_data, el.valueRef)
                 if resolved is not _MISSING and not isinstance(resolved, (dict, list)) \
                         and resolved is not None:
@@ -270,72 +316,19 @@ def compile_layout(
                 return None
             cid = new_id("kpi")
             components.append({
-                "component": "Kpi", "id": cid, "label": el.label,
+                "component": spec.component, "id": cid, "label": el.label,
                 "value": value, "trusted": trusted,
             })
             return cid
-        if el.type == "chart":
-            # Prefer trusted data bound by reference; fall back to inline.
-            data = xkey = series = None
-            trusted = False
-            if el.dataRef:
-                resolved = resolve_ref(tool_data, el.dataRef)
-                if resolved is not _MISSING:
-                    built = _chart_from_ref(resolved, el.xKey, el.series)
-                    if built:
-                        data, xkey, series = built
-                        trusted = True
-            if data is None and el.data:
-                data = el.data
-                xkey = el.xKey or "label"
-                series = el.series or ["value"]
-                trusted = False
-            if data is None:
-                return None
-            cid = new_id("chart")
-            components.append({
-                "component": "Chart", "id": cid, "chartType": el.chartType,
-                "title": el.title, "xKey": xkey, "series": series,
-                "data": data, "trusted": trusted,
-            })
-            return cid
-        if el.type == "table":
-            records = (tool_data.get("get_vulnerability_records") or {}).get("records")
-            if not records:
-                return None
-            cid = new_id("table")
-            components.append({
-                "component": "Table", "id": cid,
-                "title": el.title or "Matching Vulnerabilities",
-                # Rows are injected verbatim from the records tool, so a
-                # table is always trusted (never LLM-authored data).
-                "columns": RECORD_COLUMNS, "rows": records, "trusted": True,
-            })
-            return cid
-        if el.type == "download":
-            summary = _summary(tool_data)
-            export = (summary or {}).get("export") or {}
-            url = export.get("download_url")
-            if not url:
-                return None
-            count = export.get("record_count")
-            cid = new_id("dl")
-            components.append({
-                "component": "DownloadLink", "id": cid, "url": url,
-                "label": el.label or (
-                    f"Download report ({count} findings)" if count is not None
-                    else "Download report"
-                ),
-            })
-            return cid
-        if el.type == "filter":
-            cid = new_id("filter")
-            components.append({
-                "component": "Filter", "id": cid,
-                "fields": FILTER_FIELDS, "values": applied_filters,
-            })
-            return cid
-        return None
+
+        # 4. Generic passthrough (markdown, and any future presentation-
+        #    only element with no binding or reference): render its
+        #    authored props directly.
+        authored = el.model_dump(exclude_none=True)
+        authored.pop("type", None)
+        cid = new_id(el.type)
+        components.append({"component": spec.component, "id": cid, **authored})
+        return cid
 
     def emit_row(elements: list[Any]) -> None:
         ids = [i for i in (build_element(e) for e in elements) if i is not None]
@@ -352,9 +345,10 @@ def compile_layout(
         components.append({"component": "Row", "id": row_id, "children": ids})
         root_children.append(row_id)
 
+    solo_types = manifest.solo_types
     for row in layout.rows:
-        content = [e for e in row.elements if e.type not in _SOLO_TYPES]
-        solos = [e for e in row.elements if e.type in _SOLO_TYPES]
+        content = [e for e in row.elements if e.type not in solo_types]
+        solos = [e for e in row.elements if e.type in solo_types]
         # Content elements share this row; each solo element gets its own.
         if content:
             emit_row(content)

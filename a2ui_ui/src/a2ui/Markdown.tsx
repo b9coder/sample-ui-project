@@ -7,6 +7,20 @@ import remarkGfm from "remark-gfm";
 import { z } from "zod";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
+import type { ElementMeta } from "./manifest";
+
+// Authoring contract + metadata for a markdown narration element.
+export const markdownElementSchema = z.object({
+  text: z.string().describe("Short narration/insight in markdown."),
+});
+
+export const markdownMeta: ElementMeta = {
+  type: "markdown",
+  component: "Markdown",
+  placement: "combinable",
+  dataRefProps: [],
+  dataBinding: null,
+};
 
 const MarkdownApi: ComponentApi = {
   name: "Markdown",

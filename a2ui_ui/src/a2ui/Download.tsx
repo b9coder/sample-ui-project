@@ -6,6 +6,22 @@
 import { z } from "zod";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
+import type { ElementMeta } from "./manifest";
+
+// Authoring contract + metadata for a download element. The URL is
+// server-injected from the "summary_export" data binding; the LLM only
+// (optionally) authors the label.
+export const downloadElementSchema = z.object({
+  label: z.string().optional().describe("Button text; server fills the URL."),
+});
+
+export const downloadMeta: ElementMeta = {
+  type: "download",
+  component: "DownloadLink",
+  placement: "solo",
+  dataRefProps: [],
+  dataBinding: "summary_export",
+};
 
 const DownloadLinkApi: ComponentApi = {
   name: "DownloadLink",

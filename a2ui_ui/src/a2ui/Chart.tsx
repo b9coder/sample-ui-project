@@ -21,8 +21,33 @@ import { z } from "zod";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
 import { TrustBadge } from "./TrustBadge";
+import type { ElementMeta } from "./manifest";
 
 export type ChartType = "bar" | "horizontalBar" | "line" | "pie" | "donut";
+
+// The AUTHORING contract the agent's LLM fills for a chart element, plus
+// its metadata - shared with the agent via the generated manifest.
+// Prefer `dataRef` (trusted binding); inline xKey/series/data is the
+// untrusted fallback.
+export const chartElementSchema = z.object({
+  chartType: z.enum(["bar", "horizontalBar", "line", "pie", "donut"]),
+  title: z.string(),
+  dataRef: z.string().optional().describe("Dotted path to trusted data (preferred)."),
+  xKey: z.string().optional().describe("Label field name (inline fallback)."),
+  series: z.array(z.string()).optional().describe("Value field name(s) (inline)."),
+  data: z
+    .array(z.record(z.string(), z.unknown()))
+    .optional()
+    .describe("Inline data ONLY if no dataRef fits (untrusted)."),
+});
+
+export const chartMeta: ElementMeta = {
+  type: "chart",
+  component: "Chart",
+  placement: "combinable",
+  dataRefProps: ["dataRef"],
+  dataBinding: null,
+};
 
 export interface ChartSpec {
   chartType: ChartType;

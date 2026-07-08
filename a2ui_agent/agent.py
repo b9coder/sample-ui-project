@@ -36,7 +36,13 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
 from a2ui_schema import wrap_messages
-from layout import ARG_TO_FILTER_FIELD, Layout, bindable_paths, compile_layout
+from layout import (
+    ARG_TO_FILTER_FIELD,
+    Layout,
+    bindable_paths,
+    check_manifest_consistency,
+    compile_layout,
+)
 from identity import get_current_employee_id
 
 load_dotenv()
@@ -124,18 +130,25 @@ SYSTEM_PROMPT = (
     "business_unit, regions, is_past_due, is_escalated, is_internet_facing) "
     "- and get_vulnerability_records too if the previous turn was showing a "
     "records table. Briefly note what changed.\n\n"
-    "Your TEXT reply is always short (2-4 sentences or bullets of insight). "
-    "Do NOT restate every number or list records in text - a rich interactive "
-    "UI (cards, charts, tables) is generated automatically from your tool "
-    "results and shown below your text. Just make the right tool calls and "
-    "write the brief insight."
+    "Your TEXT reply is always short - 2-4 sentences or bullets of genuine "
+    "insight, nothing more. Do NOT restate every number, do NOT list records, "
+    "and do NOT write a download link or 'click here to download' in your "
+    "text - a rich interactive UI (KPI tiles, charts, a records table, a "
+    "download button, a filter panel) is generated automatically from your "
+    "tool results and shown below your text, and it already carries all the "
+    "numbers, the table, and the download. Just make the right tool calls and "
+    "write the brief insight, then stop."
 )
 
 A2UI_GEN_PROMPT = (
-    "You design a screen as an ordered list of ROWS. Each row holds one or "
-    "more display elements; Python turns your rows into the final UI, so you "
-    "only choose the rows, the elements, and their content - not any layout "
-    "mechanics.\n\n"
+    "You design a VISUAL screen as an ordered list of ROWS. Each row holds "
+    "one or more display elements; Python turns your rows into the final UI, "
+    "so you only choose the rows, the elements, and their content - not any "
+    "layout mechanics. IMPORTANT: this screen is VISUAL ONLY (numbers, "
+    "charts, table, download, filter). The narration/insight text is already "
+    "shown to the user as the chat reply above this screen - do NOT add any "
+    "text/markdown/narration element here; it would just duplicate the "
+    "reply.\n\n"
     "Answer the user's SPECIFIC question - the screen is the visual form of "
     "the assistant's written answer. Show only what's relevant: if they "
     "asked for a status breakdown, show the status chart, not every "
@@ -151,9 +164,7 @@ A2UI_GEN_PROMPT = (
     "Only if NO listed path fits should you provide inline data/value "
     "yourself; that visual is then shown as AI-generated (untrusted). "
     "Never invent a path that isn't listed.\n\n"
-    "Element types:\n"
-    "- markdown: short narration/insight text (markdown ok). Good as the "
-    "first row.\n"
+    "Element types (visual only - NO text/markdown element exists):\n"
     "- kpi: a headline number tile - 'label' (what it is) + a 'valueRef' "
     "path (preferred) OR an inline 'value' string. One kpi per metric "
     "(Total, Past Due, Critical, ...); put several kpis in ONE row.\n"
@@ -299,6 +310,15 @@ async def _generate_a2ui(
     if not tool_data:
         return None
     chart_paths, scalar_paths = bindable_paths(tool_data)
+    print(
+        "LLM A2UI generation context:\n"
+        f"User query: {user_query}\n"
+        f"Assistant text: {assistant_text}\n"
+        f"Chart dataRef paths: {json.dumps(chart_paths, indent=2, default=str)}\n"
+        f"Scalar valueRef paths: {json.dumps(scalar_paths, default=str)}\n"
+        f"Tool data: {json.dumps(tool_data, default=str)}\n"
+        f"Applied filters: {json.dumps(applied_filters, default=str)}"
+    )
     context = (
         f"User question: {user_query}\n\n"
         f"Assistant's written answer (the screen reinforces THIS, nothing "
@@ -314,7 +334,9 @@ async def _generate_a2ui(
     try:
         structured = llm.with_structured_output(Layout, method="function_calling")
         layout = await structured.ainvoke(A2UI_GEN_PROMPT + context)
+        print("LLM produced layout:", layout)
     except Exception:
+        print("LLM failed to produce a layout; skipping A2UI generation.")
         return None
 
     components = compile_layout(layout, tool_data, applied_filters)
@@ -335,6 +357,7 @@ def _build_graph(inner_agent, a2ui_llm: ChatOpenAI) -> StateGraph:
         return {"messages": new_messages}
 
     async def generate_ui(state: _AgentState) -> dict:
+        print("Generating A2UI for turn with messages:")
         turn = _turn_messages(state["messages"])
         tool_data = _collect_tool_data(turn)
         called_any = any(name in _DATA_TOOLS for name, _, _ in _iter_tool_calls(turn))
@@ -378,6 +401,9 @@ def _with_injected_identity(tool: BaseTool) -> BaseTool:
 async def build_agent():
     mcp_tools = await mcp_client.get_tools()
     mcp_tools = [_with_injected_identity(t) for t in mcp_tools]
+    # Surface any drift between the UI-owned catalog manifest and this
+    # agent's capabilities at startup (logged, non-fatal).
+    check_manifest_consistency()
     inner_agent = create_react_agent(build_llm(), mcp_tools, prompt=SYSTEM_PROMPT)
     graph = _build_graph(inner_agent, build_a2ui_llm())
     return graph.compile(checkpointer=MemorySaver())

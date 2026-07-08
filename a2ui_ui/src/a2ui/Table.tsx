@@ -6,6 +6,22 @@ import { z } from "zod";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
 import { TrustBadge } from "./TrustBadge";
+import type { ElementMeta } from "./manifest";
+
+// Authoring contract + metadata for a records table. Rows/columns are
+// server-injected from the "vulnerability_records" data binding (always
+// trusted); the LLM only (optionally) authors the title.
+export const tableElementSchema = z.object({
+  title: z.string().optional(),
+});
+
+export const tableMeta: ElementMeta = {
+  type: "table",
+  component: "Table",
+  placement: "solo",
+  dataRefProps: [],
+  dataBinding: "vulnerability_records",
+};
 
 export interface TableColumn {
   key: string;

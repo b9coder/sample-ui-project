@@ -25,15 +25,68 @@ function summarizeFilters(values: Record<string, unknown>): string {
   return parts.length ? `Applied filters — ${parts.join(" · ")}` : "Cleared all filters";
 }
 
+const RESULT_PREVIEW_LIMIT = 1500;
+
+function ReasoningStepView({ step }: { step: ReasoningStep }) {
+  const truncatable = step.result && step.result.length > RESULT_PREVIEW_LIMIT;
+  const [expanded, setExpanded] = useState(false);
+  const shown =
+    truncatable && !expanded ? step.result.slice(0, RESULT_PREVIEW_LIMIT) + "…" : step.result;
+  return (
+    <div className="reasoning-step">
+      <div className="reasoning-tool">
+        Called <code>{step.tool}</code>
+      </div>
+      <pre className="reasoning-args">{JSON.stringify(step.args, null, 2)}</pre>
+      <div className="reasoning-result-label">Result</div>
+      <pre className="reasoning-result">{shown}</pre>
+      {truncatable && (
+        <button className="reasoning-toggle" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "Show full result"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The collapsible "Reasoning" panel: the MCP tool calls (name, args,
+// result) the agent made this turn - mirrors one_search_ui's reasoning
+// log, so users can inspect exactly which trusted data drove the UI.
+function ReasoningLog({ steps }: { steps: ReasoningStep[] }) {
+  const [open, setOpen] = useState(false);
+  if (!steps || steps.length === 0) return null;
+  return (
+    <div className="reasoning">
+      <button className="reasoning-toggle" onClick={() => setOpen((v) => !v)}>
+        {open ? "▾ Reasoning" : `▸ Reasoning (${steps.length} tool call${steps.length > 1 ? "s" : ""})`}
+      </button>
+      {open && (
+        <div className="reasoning-log">
+          {steps.map((step, i) => (
+            <ReasoningStepView key={i} step={step} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ReasoningStep {
+  tool: string;
+  args: Record<string, unknown>;
+  result: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   a2uiMessages: unknown[] | null;
+  reasoning: ReasoningStep[];
 }
 
 function makeMessage(role: ChatMessage["role"], content: string): ChatMessage {
-  return { id: crypto.randomUUID(), role, content, a2uiMessages: null };
+  return { id: crypto.randomUUID(), role, content, a2uiMessages: null, reasoning: [] };
 }
 
 export default function App() {
@@ -42,6 +95,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const greetedRef = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
+  // tool_call_id -> {name, args}, so result events (which carry only the
+  // id) can be matched back to the call that produced them.
+  const toolCallById = useRef(new Map<string, { name: string; args: Record<string, unknown> }>());
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -81,6 +137,27 @@ export default function App() {
     const subscriber: AgentSubscriber = {
       onTextMessageContentEvent({ textMessageBuffer }) {
         update((m) => ({ ...m, content: textMessageBuffer }));
+      },
+      onToolCallStartEvent({ event }) {
+        toolCallById.current.set(event.toolCallId, { name: event.toolCallName, args: {} });
+      },
+      onToolCallEndEvent({ event, toolCallArgs }) {
+        const entry = toolCallById.current.get(event.toolCallId);
+        if (entry) entry.args = toolCallArgs;
+      },
+      onToolCallResultEvent({ event }) {
+        const entry = toolCallById.current.get(event.toolCallId);
+        update((m) => ({
+          ...m,
+          reasoning: [
+            ...m.reasoning,
+            {
+              tool: entry?.name || "unknown",
+              args: entry?.args || {},
+              result: String(event.content),
+            },
+          ],
+        }));
       },
     };
 
@@ -133,6 +210,7 @@ export default function App() {
                   </div>
                 )}
                 {m.a2uiMessages && <A2UISurface messages={m.a2uiMessages} />}
+                <ReasoningLog steps={m.reasoning} />
               </div>
             )}
           </div>

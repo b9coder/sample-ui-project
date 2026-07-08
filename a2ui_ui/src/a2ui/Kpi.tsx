@@ -5,6 +5,23 @@ import { z } from "zod";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
 import { TrustBadge } from "./TrustBadge";
+import type { ElementMeta } from "./manifest";
+
+// Authoring contract + metadata for a KPI element. Prefer `valueRef`
+// (trusted scalar path); inline `value` is the untrusted fallback.
+export const kpiElementSchema = z.object({
+  label: z.string(),
+  valueRef: z.string().optional().describe("Dotted path to a trusted scalar (preferred)."),
+  value: z.string().optional().describe("Inline value ONLY if no valueRef fits (untrusted)."),
+});
+
+export const kpiMeta: ElementMeta = {
+  type: "kpi",
+  component: "Kpi",
+  placement: "combinable",
+  dataRefProps: ["valueRef"],
+  dataBinding: null,
+};
 
 export function Kpi({
   label,

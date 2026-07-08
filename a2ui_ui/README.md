@@ -45,6 +45,38 @@ this component tree (see `a2ui_agent/README.md`) - so the agent picks
 the rows/content while placement rules (table/download/filter each get
 their own row) and data injection happen deterministically.
 
+## The shared catalog manifest (`catalog.manifest.json`)
+
+This project **owns the supported layouts** and shares them with the
+agent as a generated JSON contract, so the two projects can evolve
+independently without hand-syncing schemas.
+
+Each visualization file exports two things next to its component:
+
+- `*ElementSchema` - a zod schema for the **authoring contract** (the
+  props the agent's LLM fills for that element, e.g. a chart's
+  `dataRef`/`chartType`/inline fallback).
+- `*Meta` (`ElementMeta` from `src/a2ui/manifest.ts`) - the element
+  `type`, the a2ui `component` it renders as, its `placement`
+  (`solo`/`combinable`), its `dataRefProps` (which authored props are
+  trusted data references), and its `dataBinding` (a named server-
+  injected dataset, or null).
+
+Regenerate the manifest after adding/changing a visualization:
+
+```bash
+npm run gen:catalog     # zod -> JSON Schema + meta -> catalog.manifest.json
+```
+
+The agent reads `catalog.manifest.json` (see `a2ui_agent`'s
+`catalog_manifest.py`) to drive its compiler rules. **Adding a
+presentation-only element** (a new chart type, a stat tile) is a
+UI-only change once its Pydantic model exists on the agent side;
+**adding a new trusted data source** additionally needs a one-line
+provider in the agent's `data_providers.py`, keyed by the `dataBinding`
+name you declare here. A CI check can diff a fresh `gen:catalog` against
+the committed manifest to fail on drift.
+
 The `Filter` panel is interactive: its Apply button calls the
 `ApplyFilters` callback from `src/a2ui/ApplyFiltersContext.ts`, which
 `App.tsx` wires to send a `[UI_ACTION apply_filters]` refinement to the

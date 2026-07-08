@@ -57,8 +57,37 @@ The frontend catalog (`a2ui_ui/src/a2ui/catalog.tsx`) registers a2ui's
 `Table`, and `Filter` components (a2ui ships none of these). The
 `filter` element is interactive - Apply round-trips a
 `[UI_ACTION apply_filters]` message back to this agent, which the
-SYSTEM_PROMPT handles by re-querying with the merged filters. Keep
-`CATALOG_ID` in sync between `a2ui_schema.py` and the frontend.
+SYSTEM_PROMPT handles by re-querying with the merged filters.
+
+## Shared catalog manifest (the UI ↔ agent contract)
+
+The set of supported elements, their placement rules, trust references,
+and data bindings are **not hard-coded here** - they come from the
+`catalog.manifest.json` the UI project generates and owns (see
+`a2ui_ui`'s "shared catalog manifest"). This lets a UI developer add
+layouts and a Python developer build the agent as independent projects.
+
+- `catalog_manifest.py` loads the manifest (from the sibling `a2ui_ui/`
+  by default; override with `A2UI_CATALOG_MANIFEST`). A future increment
+  can instead receive it over AG-UI via A2UI client capabilities - the
+  parsing stays the same.
+- `compile_layout` (in `layout.py`) reads each element's `placement`
+  (solo vs combinable), `dataRefProps` (trust), `dataBinding`, and
+  target `component` name **from the manifest** - nothing element-
+  specific is hard-coded in the compiler.
+- `data_providers.py` is the agent-owned half: a registry mapping each
+  `dataBinding` name (e.g. `vulnerability_records`, `summary_export`,
+  `filter_schema`) to a function that pulls that trusted dataset from the
+  turn's tool output. A new trusted data source = one provider here.
+- `check_manifest_consistency()` runs at startup and logs (non-fatally)
+  any drift - e.g. the manifest advertising an element the agent can't
+  emit yet, or a `dataBinding` with no registered provider.
+
+The boundary: a **presentation-only** element the UI adds needs no agent
+change beyond its Pydantic model (a documented next step is generating
+those from the manifest too); a **new trusted data source** needs a
+one-line `data_providers.py` entry. Keep the manifest's `catalogId` in
+sync with `a2ui_schema.py`'s `CATALOG_ID`.
 
 ## Access control
 

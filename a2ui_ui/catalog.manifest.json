@@ -1,0 +1,162 @@
+{
+  "catalogId": "a2ui-vuln-catalog-v1",
+  "version": "1.0.0",
+  "generatedBy": "a2ui_ui/scripts/gen-catalog.ts",
+  "elements": [
+    {
+      "type": "markdown",
+      "component": "Markdown",
+      "placement": "combinable",
+      "dataRefProps": [],
+      "dataBinding": null,
+      "props": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Short narration/insight in markdown."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "type": "kpi",
+      "component": "Kpi",
+      "placement": "combinable",
+      "dataRefProps": [
+        "valueRef"
+      ],
+      "dataBinding": null,
+      "props": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "valueRef": {
+            "type": "string",
+            "description": "Dotted path to a trusted scalar (preferred)."
+          },
+          "value": {
+            "type": "string",
+            "description": "Inline value ONLY if no valueRef fits (untrusted)."
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "type": "chart",
+      "component": "Chart",
+      "placement": "combinable",
+      "dataRefProps": [
+        "dataRef"
+      ],
+      "dataBinding": null,
+      "props": {
+        "type": "object",
+        "properties": {
+          "chartType": {
+            "type": "string",
+            "enum": [
+              "bar",
+              "horizontalBar",
+              "line",
+              "pie",
+              "donut"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "dataRef": {
+            "type": "string",
+            "description": "Dotted path to trusted data (preferred)."
+          },
+          "xKey": {
+            "type": "string",
+            "description": "Label field name (inline fallback)."
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Value field name(s) (inline)."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "description": "Inline data ONLY if no dataRef fits (untrusted)."
+          }
+        },
+        "required": [
+          "chartType",
+          "title"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "type": "table",
+      "component": "Table",
+      "placement": "solo",
+      "dataRefProps": [],
+      "dataBinding": "vulnerability_records",
+      "props": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "type": "download",
+      "component": "DownloadLink",
+      "placement": "solo",
+      "dataRefProps": [],
+      "dataBinding": "summary_export",
+      "props": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Button text; server fills the URL."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "type": "filter",
+      "component": "Filter",
+      "placement": "solo",
+      "dataRefProps": [],
+      "dataBinding": "filter_schema",
+      "props": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    }
+  ]
+}
