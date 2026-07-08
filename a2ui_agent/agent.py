@@ -20,9 +20,11 @@ with no extra protocol wiring.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Annotated, Any
 
+import httpx
 from typing_extensions import TypedDict
 
 from dotenv import load_dotenv
@@ -44,6 +46,8 @@ from layout import (
     compile_layout,
 )
 from identity import get_current_employee_id
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -84,11 +88,34 @@ _DATA_TOOLS = (
 )
 
 
+def _openrouter_ssl_kwargs() -> dict[str, Any]:
+    """Honor OPENROUTER_SSL_VERIFY for corporate networks that terminate
+    TLS with a self-signed / internal-CA proxy in front of OpenRouter:
+      - unset / "true"  -> normal certificate verification (default)
+      - "false"/"0"/"no" -> DISABLE verification (insecure; use only when
+        you control/trust the network path to the proxy)
+      - any other value  -> treated as a filesystem path to a CA bundle
+        (the SECURE option - point it at your corporate root CA .pem)
+
+    When verification is on we pass nothing and let the OpenAI SDK manage
+    its own HTTP client; only a custom verify setting builds explicit
+    httpx clients (sync + async, since tool calls run async)."""
+    setting = os.environ.get("OPENROUTER_SSL_VERIFY", "true").strip()
+    if setting.lower() in ("", "true", "1", "yes", "on"):
+        return {}
+    verify: bool | str = False if setting.lower() in ("false", "0", "no", "off") else setting
+    return {
+        "http_client": httpx.Client(verify=verify),
+        "http_async_client": httpx.AsyncClient(verify=verify),
+    }
+
+
 def build_llm() -> ChatOpenAI:
     return ChatOpenAI(
         model=os.environ["OPENROUTER_MODEL"],
         api_key=os.environ["OPENROUTER_API_KEY"],
         base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        **_openrouter_ssl_kwargs(),
     )
 
 
@@ -97,6 +124,7 @@ def build_a2ui_llm() -> ChatOpenAI:
         model=A2UI_MODEL,
         api_key=os.environ["OPENROUTER_API_KEY"],
         base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        **_openrouter_ssl_kwargs(),
     )
 
 
@@ -310,14 +338,11 @@ async def _generate_a2ui(
     if not tool_data:
         return None
     chart_paths, scalar_paths = bindable_paths(tool_data)
-    print(
-        "LLM A2UI generation context:\n"
-        f"User query: {user_query}\n"
-        f"Assistant text: {assistant_text}\n"
-        f"Chart dataRef paths: {json.dumps(chart_paths, indent=2, default=str)}\n"
-        f"Scalar valueRef paths: {json.dumps(scalar_paths, default=str)}\n"
-        f"Tool data: {json.dumps(tool_data, default=str)}\n"
-        f"Applied filters: {json.dumps(applied_filters, default=str)}"
+    # Full tool data can contain user PII / vulnerability details - keep it
+    # at DEBUG so it never lands in normal (info) logs.
+    logger.debug(
+        "A2UI generation context: query=%r chart_paths=%s scalar_paths=%s",
+        user_query, list(chart_paths), scalar_paths,
     )
     context = (
         f"User question: {user_query}\n\n"
@@ -334,9 +359,9 @@ async def _generate_a2ui(
     try:
         structured = llm.with_structured_output(Layout, method="function_calling")
         layout = await structured.ainvoke(A2UI_GEN_PROMPT + context)
-        print("LLM produced layout:", layout)
+        logger.debug("A2UI layout produced: %d rows", len(layout.rows))
     except Exception:
-        print("LLM failed to produce a layout; skipping A2UI generation.")
+        logger.exception("A2UI generation failed; keeping the previous surface")
         return None
 
     components = compile_layout(layout, tool_data, applied_filters)
@@ -357,7 +382,6 @@ def _build_graph(inner_agent, a2ui_llm: ChatOpenAI) -> StateGraph:
         return {"messages": new_messages}
 
     async def generate_ui(state: _AgentState) -> dict:
-        print("Generating A2UI for turn with messages:")
         turn = _turn_messages(state["messages"])
         tool_data = _collect_tool_data(turn)
         called_any = any(name in _DATA_TOOLS for name, _, _ in _iter_tool_calls(turn))

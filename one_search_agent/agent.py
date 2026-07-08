@@ -59,6 +59,7 @@ import json
 import os
 from typing import Annotated, Any
 
+import httpx
 from typing_extensions import TypedDict
 
 from dotenv import load_dotenv
@@ -219,11 +220,34 @@ _ARG_TO_FILTER_FIELD = {
 _SEARCH_TOOLS = {"get_vulnerability_summary", "get_risk_ranking", "get_remediation_trend"}
 
 
+def _openrouter_ssl_kwargs() -> dict[str, Any]:
+    """Honor OPENROUTER_SSL_VERIFY for corporate networks that terminate
+    TLS with a self-signed / internal-CA proxy in front of OpenRouter:
+      - unset / "true"  -> normal certificate verification (default)
+      - "false"/"0"/"no" -> DISABLE verification (insecure; use only when
+        you control/trust the network path to the proxy)
+      - any other value  -> treated as a filesystem path to a CA bundle
+        (the SECURE option - point it at your corporate root CA .pem)
+
+    Only a custom verify setting builds explicit httpx clients (sync +
+    async, since tool calls run async); otherwise the OpenAI SDK manages
+    its own client."""
+    setting = os.environ.get("OPENROUTER_SSL_VERIFY", "true").strip()
+    if setting.lower() in ("", "true", "1", "yes", "on"):
+        return {}
+    verify: bool | str = False if setting.lower() in ("false", "0", "no", "off") else setting
+    return {
+        "http_client": httpx.Client(verify=verify),
+        "http_async_client": httpx.AsyncClient(verify=verify),
+    }
+
+
 def build_llm() -> ChatOpenAI:
     return ChatOpenAI(
         model=os.environ["OPENROUTER_MODEL"],
         api_key=os.environ["OPENROUTER_API_KEY"],
         base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        **_openrouter_ssl_kwargs(),
     )
 
 
@@ -866,6 +890,7 @@ async def build_agent():
             model=COMPOSER_MODEL,
             api_key=os.environ["OPENROUTER_API_KEY"],
             base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            **_openrouter_ssl_kwargs(),
         )
         if COMPOSER_MODE in ("llm", "hybrid")
         else None

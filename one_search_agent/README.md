@@ -88,6 +88,10 @@ PYTHON_BIN=python3
 # Optional - display-element composer (see "Hybrid composer" above).
 COMPOSER_MODE=deterministic   # deterministic (default) | llm | hybrid
 # COMPOSER_MODEL=openai/gpt-4o-mini   # defaults to OPENROUTER_MODEL
+
+# Optional - TLS to OpenRouter behind a corporate self-signed-cert proxy:
+#   true (default) = verify | false = disable (insecure) | /path/ca.pem = corporate CA (secure)
+OPENROUTER_SSL_VERIFY=true
 ```
 
 `VULN_MCP_PROJECT_DIR` must point at the directory that *contains*

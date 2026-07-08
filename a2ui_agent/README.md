@@ -115,6 +115,10 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 A2UI_MODEL=openai/gpt-4o-mini              # UI-generation model (optional)
 VULN_MCP_PROJECT_DIR=/absolute/path/to/claud-playground
 PYTHON_BIN=/abs/path/to/vulnerability_mcp/.venv/bin/python3
+
+# Optional - TLS to OpenRouter behind a corporate self-signed-cert proxy:
+#   true (default) = verify | false = disable (insecure) | /path/ca.pem = corporate CA (secure)
+OPENROUTER_SSL_VERIFY=true
 ```
 
 `VULN_MCP_PROJECT_DIR` must contain `vulnerability_mcp/` - this agent
