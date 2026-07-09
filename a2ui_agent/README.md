@@ -89,6 +89,28 @@ those from the manifest too); a **new trusted data source** needs a
 one-line `data_providers.py` entry. Keep the manifest's `catalogId` in
 sync with `a2ui_schema.py`'s `CATALOG_ID`.
 
+## Landing / orientation experience
+
+On a fresh conversation the frontend auto-sends `[UI_ACTION session_start]`
+(no typing needed). The agent runs the orientation flow — resolve
+effective permissions (`get_user_access`) → retrieve accessible scope
+(`get_scope_insights` + `get_vulnerability_summary`) → generate a context
+summary → display — producing:
+
+- an **Access Summary** with what the user can access AND *why*
+  (`access_reasons`: Application Owner, Delegate for <name>, admin / role
+  groups — from the authorization service, never inferred);
+- a concise **Within your scope** section of actionable insights (apps
+  with overdue Critical, internet-facing High/Critical assets, past-due /
+  unremediated counts, average open finding age);
+- headline **KPI tiles** + a **filter panel** on the a2ui surface;
+- 6 scope-aware **suggested starting points** (see `suggestions.py`'s
+  session-start rule; `MAX_LANDING_SUGGESTIONS` controls the count).
+
+The goal is orientation, not analysis — no large tables on landing. The
+session-start section of `SYSTEM_PROMPT` drives it; it's the one turn
+where a longer, structured text reply is expected.
+
 ## Access control
 
 Vulnerability queries are scoped per-user by a trusted `X-Employee-Id`
@@ -119,7 +141,27 @@ PYTHON_BIN=/abs/path/to/vulnerability_mcp/.venv/bin/python3
 # Optional - TLS to OpenRouter behind a corporate self-signed-cert proxy:
 #   true (default) = verify | false = disable (insecure) | /path/ca.pem = corporate CA (secure)
 OPENROUTER_SSL_VERIFY=true
+
+# Optional - related follow-up questions shown under the answer (see below).
+SUGGESTIONS_MODE=deterministic   # deterministic (default) | llm | off
+# MAX_SUGGESTIONS=3
 ```
+
+## Related follow-up questions (`suggestions.py`)
+
+After each substantive answer the agent returns 2-3 **related questions**
+on the `suggestions` state key; the frontend renders them as clickable
+chips, and clicking one asks it. It's a **tunable module**:
+
+- `suggestions.py`'s `SUGGESTION_RULES` is the single place to edit what
+  gets suggested - each rule pairs a context predicate (does this turn
+  have a summary? records? an admin user?) with the questions to offer.
+  `build_context` computes the signals; extend both to key off more.
+- `SUGGESTIONS_MODE`: `deterministic` (the rules, instant, no LLM),
+  `llm` (a model proposes questions from the answer + data, falling back
+  to the rules on failure), or `off`. `MAX_SUGGESTIONS` caps the count.
+- The just-asked question is always filtered out, and duplicates are
+  removed.
 
 `VULN_MCP_PROJECT_DIR` must contain `vulnerability_mcp/` - this agent
 spawns `python -m vulnerability_mcp.server` over stdio with that cwd,

@@ -19,12 +19,160 @@ body {
   color: var(--text);
 }
 
+.app-shell {
+  display: flex;
+  min-height: 100svh;
+}
+
 .app {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 100svh;
   max-width: 1100px;
   margin: 0 auto;
+}
+
+/* --- Sidebar --- */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px;
+  border-right: 1px solid var(--border);
+  background: #111113;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100svh;
+}
+.sidebar.collapsed {
+  width: 56px;
+  align-items: center;
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-brand-icon {
+  width: 22px;
+  height: 22px;
+}
+.sidebar-brand-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.sidebar-toggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.sidebar-toggle:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+.sidebar-new-btn {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sidebar-new-btn:hover {
+  opacity: 0.92;
+}
+.sidebar-search {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.sidebar-item:hover {
+  background: var(--surface);
+}
+.sidebar-item.active {
+  background: color-mix(in oklab, var(--primary) 22%, var(--surface));
+}
+.sidebar-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.sidebar-item-actions {
+  display: none;
+  gap: 2px;
+}
+.sidebar-item:hover .sidebar-item-actions {
+  display: flex;
+}
+.sidebar-item-action {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+.sidebar-item-action:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+.sidebar-item-edit {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.sidebar-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px;
+  text-align: center;
 }
 
 .app-header {
@@ -409,6 +557,42 @@ body {
   font-size: 13px;
   padding: 20px;
   text-align: center;
+}
+
+/* Related follow-up questions - clickable chips under an answer. */
+.suggestions {
+  margin-top: 14px;
+}
+.suggestions-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.suggestions-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.suggestion-chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.suggestion-chip:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 12%, var(--surface));
+}
+.suggestion-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Reasoning log - collapsible list of the agent's MCP tool calls. */

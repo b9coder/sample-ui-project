@@ -46,6 +46,7 @@ from layout import (
     compile_layout,
 )
 from identity import get_current_employee_id
+from suggestions import build_suggestions
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,12 @@ _IDENTITY_INJECTED_TOOLS = {
     "get_risk_ranking",
     "get_remediation_trend",
     "get_user_access",
+    "get_scope_insights",
 }
 
 _DATA_TOOLS = (
     "get_user_access",
+    "get_scope_insights",
     "get_vulnerability_summary",
     "get_vulnerability_records",
     "get_risk_ranking",
@@ -132,8 +135,13 @@ SYSTEM_PROMPT = (
     "You are the A2UI Vulnerability Assistant, a security-analytics copilot. "
     "You have MCP tools for vulnerability data:\n"
     "- get_user_access: the current user's own access (owned apps, owned "
-    "infrastructure, delegated access, admin groups, total visible count). "
-    "Call it for the session-start welcome and 'what can I see' questions.\n"
+    "infrastructure, delegated access, admin groups, total visible count, and "
+    "'access_reasons' - a structured WHY list). Call it for the session-start "
+    "welcome and 'what can I see' questions.\n"
+    "- get_scope_insights: actionable, high-level metrics about the user's "
+    "vulnerability landscape (apps with overdue Critical, internet-facing "
+    "High/Critical assets, past-due count, unremediated count, average open "
+    "finding age). For the session-start orientation.\n"
     "- get_vulnerability_summary: totals + dimensional breakdowns (severity, "
     "OS, platform, status, application, business unit, owner, internet-facing) "
     "+ a CSV export, for a set of filters.\n"
@@ -146,11 +154,29 @@ SYSTEM_PROMPT = (
     "ambiguous rather than guessing.\n\n"
     "ALWAYS call the appropriate tool(s) rather than guessing numbers, and "
     "pass every filter the user gave into the matching tool argument.\n\n"
-    "When the message is exactly '[UI_ACTION session_start]', greet the user: "
-    "call get_user_access then get_vulnerability_summary (no filters), and "
-    "write one or two friendly sentences summarizing their access and "
-    "inviting them to explore a specific application, their past-due "
-    "findings, or their riskiest assets.\n\n"
+    "## Session start - the ORIENTATION / landing experience\n"
+    "When the message is exactly '[UI_ACTION session_start]', the user just "
+    "landed and hasn't asked anything yet. Your job is to GROUND them before "
+    "the conversation. Call get_user_access, get_vulnerability_summary (no "
+    "filters), AND get_scope_insights, then write a structured welcome (this "
+    "is the ONE turn where a longer, multi-section text reply is expected). "
+    "Cover, using markdown headings + short bullets:\n"
+    "  **Access Summary** - what they can access (applications, total "
+    "vulnerabilities, Critical, High) AND why, listing each entry from "
+    "get_user_access.access_reasons verbatim as a checkmark bullet (e.g. "
+    "'✓ Application Owner (12 applications)', '✓ Delegate for Jane "
+    "Smith', '✓ Risk Champion - Consumer Banking'). This 'why' comes "
+    "from the authorization service - never invent a reason.\n"
+    "  **Within your scope** - 3-5 of the most ACTIONABLE insights from "
+    "get_scope_insights, phrased as findings not raw stats (e.g. 'N "
+    "applications have overdue Critical vulnerabilities', 'N internet-facing "
+    "assets carry High/Critical findings', 'average open finding age is N "
+    "days'). Skip any metric that's zero. Keep it concise - orientation, not "
+    "analysis; don't dump tables.\n"
+    "Close with one short line inviting them to pick a starting point below. "
+    "The on-screen surface shows the headline KPI tiles and a filter panel, "
+    "and clickable suggested starting points appear under your text - so do "
+    "NOT restate every number or tell them to type; just orient and invite.\n\n"
     "When the message starts with '[UI_ACTION apply_filters]' followed by "
     "JSON, treat it as a filter refinement from the on-screen filter panel: "
     "re-call get_vulnerability_summary with those filter values mapped to "
@@ -158,7 +184,8 @@ SYSTEM_PROMPT = (
     "business_unit, regions, is_past_due, is_escalated, is_internet_facing) "
     "- and get_vulnerability_records too if the previous turn was showing a "
     "records table. Briefly note what changed.\n\n"
-    "Your TEXT reply is always short - 2-4 sentences or bullets of genuine "
+    "For every NORMAL turn (everything except session start), your TEXT reply "
+    "is short - 2-4 sentences or bullets of genuine "
     "insight, nothing more. Do NOT restate every number, do NOT list records, "
     "and do NOT write a download link or 'click here to download' in your "
     "text - a rich interactive UI (KPI tiles, charts, a records table, a "
@@ -373,6 +400,9 @@ async def _generate_a2ui(
 class _AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     a2ui_messages: list[dict[str, Any]] | None
+    # 2-3 related follow-up questions to show under the answer (see
+    # suggestions.py); the frontend renders them as clickable chips.
+    suggestions: list[str] | None
 
 
 def _build_graph(inner_agent, a2ui_llm: ChatOpenAI) -> StateGraph:
@@ -385,15 +415,28 @@ def _build_graph(inner_agent, a2ui_llm: ChatOpenAI) -> StateGraph:
         turn = _turn_messages(state["messages"])
         tool_data = _collect_tool_data(turn)
         called_any = any(name in _DATA_TOOLS for name, _, _ in _iter_tool_calls(turn))
+        user_query = _user_query(turn)
+        assistant_text = _assistant_text(turn)
+
         a2ui_messages = await _generate_a2ui(
-            tool_data, _applied_filters(turn), _user_query(turn), _assistant_text(turn), a2ui_llm
+            tool_data, _applied_filters(turn), user_query, assistant_text, a2ui_llm
         )
-        if a2ui_messages is not None:
-            return {"a2ui_messages": a2ui_messages}
+
+        # Related follow-up questions - shown whenever this turn produced a
+        # substantive (tool-backed) answer; skipped for pure follow-ups so
+        # stale chips from the previous turn stay put.
+        update: dict[str, Any] = {}
         if called_any:
+            update["suggestions"] = await build_suggestions(
+                tool_data, user_query, assistant_text, a2ui_llm
+            )
+
+        if a2ui_messages is not None:
+            update["a2ui_messages"] = a2ui_messages
+        elif called_any:
             # A data turn that produced nothing renderable - clear stale UI.
-            return {"a2ui_messages": None}
-        return {}
+            update["a2ui_messages"] = None
+        return update
 
     graph = StateGraph(_AgentState)
     graph.add_node("inner", call_inner)

@@ -28,6 +28,12 @@ a2ui.org messages and renders them.
    (interactive: sort/paginate/CSV), `Filter.tsx` (interactive). Its
    `CATALOG_ID` must match `a2ui_agent/a2ui_schema.py`.
 
+Beyond the a2ui surface, two chat-level React components render under
+each answer (not part of the a2ui catalog - they're chat affordances):
+`ReasoningLog` (the agent's MCP tool calls) and `SuggestedQuestions.tsx`
+(clickable **related-question** chips from the agent's `suggestions`
+state; clicking one asks it - see the agent's `suggestions.py`).
+
 ### Data trust badges (`TrustBadge.tsx`)
 
 Every data-bearing visualization shows a trust badge. When the backend
@@ -82,6 +88,45 @@ The `Filter` panel is interactive: its Apply button calls the
 `App.tsx` wires to send a `[UI_ACTION apply_filters]` refinement to the
 agent (the raw payload is hidden; a short summary bubble is shown).
 
+## Conversation management (`server/`, `src/conversations/`)
+
+The left sidebar (`src/conversations/Sidebar.tsx`) lists conversations
+and supports **create / rename / delete / switch**. Each conversation is
+a separate AG-UI thread (`aguiAgent.threadId`), so the Python agent keeps
+per-conversation state; the transcript itself is persisted in the
+browser's `localStorage` keyed by conversation id
+(`src/conversations/storage.ts`), and a fresh conversation auto-fires the
+session-start greeting and auto-names from the first message.
+
+A Vite dev-server **Node.js middleware API** (`server/`) backs the
+sidebar list at `/api/conversations` (GET list, POST create, PATCH
+rename, POST `/:id/touch`, DELETE) - it stores only metadata
+(id/name/timestamps), never message content. The backend is pluggable
+via `CONVERSATIONS_BACKEND`:
+
+- **`sqlite`** (default) - a zero-config local file DB (`node:sqlite`).
+- **`postgres`** (production) - `server/postgresStore.ts`; set the
+  `CONVERSATIONS_PG_*` vars. Expected schema:
+
+  ```sql
+  CREATE TABLE conversations (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  ```
+
+  If the real column names differ, edit `COLUMN_MAP` in
+  `postgresStore.ts`. Both backends implement the same
+  `ConversationsSource` interface (`server/types.ts`), so switching is
+  just the env var.
+
+> Note: this API is mounted into the Vite dev server. For a production
+> deployment you'd run the same handlers behind your real Node server /
+> the app's BFF rather than `vite dev` - the store modules
+> (`server/*Store.ts`) are transport-agnostic.
+
 ## Setup & running
 
 ```bash
@@ -97,6 +142,7 @@ port 8004 and `vulnerability_mcp`'s download API on port 8000.
 ```env
 VITE_AGUI_URL=http://localhost:8004/agui
 VITE_DEV_EMPLOYEE_ID=E100000     # simulates the Okta gateway's X-Employee-Id
+CONVERSATIONS_BACKEND=sqlite     # or "postgres" (+ CONVERSATIONS_PG_* vars)
 ```
 
 `VITE_DEV_EMPLOYEE_ID` pins the signed-in identity (the gateway would

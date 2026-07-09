@@ -5,8 +5,16 @@ import type { AgentSubscriber } from "@ag-ui/client";
 import { aguiAgent } from "./agent";
 import { A2UISurface } from "./a2ui/A2UISurface";
 import { ApplyFiltersContext } from "./a2ui/ApplyFiltersContext";
+import { SuggestedQuestions } from "./SuggestedQuestions";
+import { Sidebar } from "./conversations/Sidebar";
+import * as conversationsApi from "./conversations/api";
+import type { Conversation } from "./conversations/api";
+import { loadMessages, saveMessages, clearMessages } from "./conversations/storage";
+import { makeMessage, type ChatMessage, type ReasoningStep } from "./types";
 
 const SESSION_START = "[UI_ACTION session_start]";
+const DEFAULT_NAME = "New conversation";
+const SIDEBAR_COLLAPSED_KEY = "a2ui_sidebar_collapsed";
 
 // A short bubble summary of an applied filter set (the raw action
 // payload is never shown to the user).
@@ -49,9 +57,6 @@ function ReasoningStepView({ step }: { step: ReasoningStep }) {
   );
 }
 
-// The collapsible "Reasoning" panel: the MCP tool calls (name, args,
-// result) the agent made this turn - mirrors one_search_ui's reasoning
-// log, so users can inspect exactly which trusted data drove the UI.
 function ReasoningLog({ steps }: { steps: ReasoningStep[] }) {
   const [open, setOpen] = useState(false);
   if (!steps || steps.length === 0) return null;
@@ -71,53 +76,103 @@ function ReasoningLog({ steps }: { steps: ReasoningStep[] }) {
   );
 }
 
-interface ReasoningStep {
-  tool: string;
-  args: Record<string, unknown>;
-  result: string;
-}
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  a2uiMessages: unknown[] | null;
-  reasoning: ReasoningStep[];
-}
-
-function makeMessage(role: ChatMessage["role"], content: string): ChatMessage {
-  return { id: crypto.randomUUID(), role, content, a2uiMessages: null, reasoning: [] };
-}
-
 export default function App() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const greetedRef = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
-  // tool_call_id -> {name, args}, so result events (which carry only the
-  // id) can be matched back to the call that produced them.
+  const activeIdRef = useRef<string | null>(null);
+  // Conversations already greeted with session_start this app session,
+  // so switching back and forth doesn't re-trigger the welcome.
+  const greetedRef = useRef<Set<string>>(new Set());
   const toolCallById = useRef(new Map<string, { name: string; args: Record<string, unknown> }>());
+
+  // Bootstrap: load the conversation list (create one if empty) and open
+  // the most recently active one.
+  useEffect(() => {
+    conversationsApi.listConversations().then(async (list) => {
+      let initial = list;
+      if (initial.length === 0) initial = [await conversationsApi.createConversation()];
+      setConversations(initial);
+      const first = initial[0];
+      activeIdRef.current = first.id;
+      setActiveId(first.id);
+      aguiAgent.threadId = first.id;
+      setMessages(loadMessages(first.id));
+    });
+  }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Greet once on load: fire the hidden session_start so the agent
-  // welcomes the user with their access summary + vuln breakdown.
   useEffect(() => {
-    if (greetedRef.current) return;
-    greetedRef.current = true;
+    if (activeId) saveMessages(activeId, messages);
+  }, [activeId, messages]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  // Greet on a freshly-opened, empty conversation (once per id).
+  useEffect(() => {
+    if (!activeId || loading) return;
+    if (messages.length > 0) {
+      greetedRef.current.add(activeId);
+      return;
+    }
+    if (greetedRef.current.has(activeId)) return;
+    greetedRef.current.add(activeId);
     void send(SESSION_START);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, messages.length, loading]);
+
+  const switchConversation = useCallback((id: string) => {
+    if (id === activeIdRef.current) return;
+    activeIdRef.current = id;
+    setActiveId(id);
+    aguiAgent.threadId = id;
+    aguiAgent.setMessages([]);
+    setMessages(loadMessages(id));
   }, []);
+
+  async function handleCreateConversation() {
+    const created = await conversationsApi.createConversation();
+    setConversations((prev) => [created, ...prev]);
+    switchConversation(created.id);
+  }
+
+  async function handleRenameConversation(id: string, name: string) {
+    const updated = await conversationsApi.renameConversation(id, name);
+    setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
+  }
+
+  async function handleDeleteConversation(id: string) {
+    await conversationsApi.deleteConversation(id);
+    clearMessages(id);
+    const remaining = conversations.filter((c) => c.id !== id);
+    if (id === activeIdRef.current) {
+      if (remaining.length > 0) {
+        switchConversation(remaining[0].id);
+      } else {
+        const created = await conversationsApi.createConversation();
+        remaining.push(created);
+        switchConversation(created.id);
+      }
+    }
+    setConversations(remaining);
+  }
 
   async function send(overrideText?: string, displayText?: string) {
     const text = (overrideText ?? input).trim();
     if (!text || loading) return;
+    const conversationId = activeIdRef.current;
 
-    // Hide the raw sentinel for [UI_ACTION ...] messages; show a friendly
-    // bubble only if a displayText was provided (e.g. filter refinements).
     const isAction = text.startsWith("[UI_ACTION ");
     if (!isAction) {
       setMessages((prev) => [...prev, makeMessage("user", text)]);
@@ -151,11 +206,7 @@ export default function App() {
           ...m,
           reasoning: [
             ...m.reasoning,
-            {
-              tool: entry?.name || "unknown",
-              args: entry?.args || {},
-              result: String(event.content),
-            },
+            { tool: entry?.name || "unknown", args: entry?.args || {}, result: String(event.content) },
           ],
         }));
       },
@@ -163,14 +214,31 @@ export default function App() {
 
     try {
       await aguiAgent.runAgent({}, subscriber);
-      const state = aguiAgent.state as { a2ui_messages?: unknown[] | null };
-      if (state?.a2ui_messages) {
-        update((m) => ({ ...m, a2uiMessages: state.a2ui_messages! }));
-      }
+      const state = aguiAgent.state as {
+        a2ui_messages?: unknown[] | null;
+        suggestions?: string[] | null;
+      };
+      if (state?.a2ui_messages) update((m) => ({ ...m, a2uiMessages: state.a2ui_messages! }));
+      if (state?.suggestions) update((m) => ({ ...m, suggestions: state.suggestions! }));
     } catch (err) {
       update((m) => ({ ...m, content: `Error: ${(err as Error).message}` }));
     } finally {
       setLoading(false);
+    }
+
+    // Name a fresh conversation after its first real message; otherwise
+    // just bump its position in the list.
+    if (conversationId && !isAction) {
+      const conversation = conversations.find((c) => c.id === conversationId);
+      if (conversation && conversation.name === DEFAULT_NAME) {
+        void handleRenameConversation(conversationId, text.length > 60 ? text.slice(0, 60) + "…" : text);
+      } else {
+        void conversationsApi.touchConversation(conversationId).then(() => {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === conversationId ? { ...c, updatedAt: new Date().toISOString() } : c))
+          );
+        });
+      }
     }
   }
 
@@ -181,9 +249,6 @@ export default function App() {
     }
   }
 
-  // Wired into the a2ui Filter component via context: Apply sends a
-  // filter-refinement action to the agent (raw payload hidden; a short
-  // summary bubble is shown instead).
   const handleApplyFilters = useCallback((values: Record<string, unknown>) => {
     void send(`[UI_ACTION apply_filters] ${JSON.stringify(values)}`, summarizeFilters(values));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,55 +256,73 @@ export default function App() {
 
   return (
     <ApplyFiltersContext.Provider value={handleApplyFilters}>
-    <div className="app">
-      <header className="app-header">
-        <span className="app-brand">A2UI Vulnerability Assistant</span>
-        <span className="app-sub">UI generated by the agent · rendered with @a2ui/react</span>
-      </header>
+      <div className="app-shell">
+        <Sidebar
+          conversations={conversations}
+          activeId={activeId}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+          onSelect={switchConversation}
+          onCreate={handleCreateConversation}
+          onRename={handleRenameConversation}
+          onDelete={handleDeleteConversation}
+        />
+        <div className="app">
+          <header className="app-header">
+            <span className="app-brand">A2UI Vulnerability Assistant</span>
+            <span className="app-sub">UI generated by the agent · rendered with @a2ui/react</span>
+          </header>
 
-      <div className="chat">
-        {messages.map((m) => (
-          <div key={m.id} className={`row ${m.role}`}>
-            {m.role === "user" ? (
-              <div className="bubble">{m.content}</div>
-            ) : (
-              <div className="assistant">
-                {m.content && (
-                  <div className="assistant-text">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+          <div className="chat">
+            {messages.map((m, i) => (
+              <div key={m.id} className={`row ${m.role}`}>
+                {m.role === "user" ? (
+                  <div className="bubble">{m.content}</div>
+                ) : (
+                  <div className="assistant">
+                    {m.content && (
+                      <div className="assistant-text">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                      </div>
+                    )}
+                    {m.a2uiMessages && <A2UISurface messages={m.a2uiMessages} />}
+                    <SuggestedQuestions
+                      questions={m.suggestions}
+                      onAsk={(q) => void send(q)}
+                      disabled={loading}
+                      label={i === 0 ? "Suggested starting points" : "Related questions"}
+                    />
+                    <ReasoningLog steps={m.reasoning} />
                   </div>
                 )}
-                {m.a2uiMessages && <A2UISurface messages={m.a2uiMessages} />}
-                <ReasoningLog steps={m.reasoning} />
+              </div>
+            ))}
+            {loading && (
+              <div className="row assistant">
+                <div className="typing">
+                  <span />
+                  <span />
+                  <span />
+                </div>
               </div>
             )}
+            <div ref={endRef} />
           </div>
-        ))}
-        {loading && (
-          <div className="row assistant">
-            <div className="typing">
-              <span />
-              <span />
-              <span />
-            </div>
-          </div>
-        )}
-        <div ref={endRef} />
-      </div>
 
-      <div className="input-bar">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="e.g. Show critical vulnerabilities for my applications"
-          rows={1}
-        />
-        <button onClick={() => send()} disabled={loading || !input.trim()}>
-          Send
-        </button>
+          <div className="input-bar">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="e.g. Show critical vulnerabilities for my applications"
+              rows={1}
+            />
+            <button onClick={() => send()} disabled={loading || !input.trim()}>
+              Send
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
     </ApplyFiltersContext.Provider>
   );
 }
