@@ -62,18 +62,24 @@ cd ..
 python -m vulnerability_mcp.server
 ```
 
-This speaks MCP's stdio/JSON-RPC protocol - it has no HTTP port and
-will just sit there waiting for a client to talk to it on stdin/stdout
-(that's expected, not a hang). Use this command when pointing a
-**generic** MCP client (Claude Desktop, Claude Code, the MCP
-Inspector) at this server directly - see `vulnerability_mcp/README.md`
-for a sample client config.
+The server can run two ways, chosen by `VULN_MCP_MCP_TRANSPORT` (in
+`vulnerability_mcp/.env`, read regardless of the working directory):
 
-**For this project's own agent**, you don't run this command yourself
-at all - skip straight to step 4 below. `one_search_agent` spawns
-`python -m vulnerability_mcp.server` itself as a stdio subprocess each
-time *it* starts (using the same venv set up above), so there's
-nothing separate to keep running for that path.
+- **`streamable-http`** (recommended) - runs as an **independent,
+  long-lived HTTP service** on `VULN_MCP_MCP_HOST:VULN_MCP_MCP_PORT`
+  (default `127.0.0.1:8765`, endpoint `/mcp`). Start it once and keep it
+  running; the agents connect to it over the network via `VULN_MCP_URL`
+  and do NOT spawn or manage it. This decouples the MCP server's
+  lifecycle from the agents.
+- **`stdio`** - the classic MCP transport: the server is spawned as a
+  subprocess by whatever launches it (a generic MCP client like Claude
+  Desktop / the MCP Inspector, or - if `VULN_MCP_URL` is left unset - the
+  agent itself). In that agent-spawn case you don't run this command
+  yourself; skip to step 4.
+
+For the recommended independent-HTTP setup, keep this process running
+and set `VULN_MCP_URL=http://127.0.0.1:8765/mcp` in each agent's `.env`
+(already set in `a2ui_agent/.env`).
 
 ## 3. Start the download API (port 8000)
 
@@ -106,6 +112,9 @@ OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_A2UI_MODEL=openai/gpt-4o-mini
+# Connect to the independent HTTP MCP server from step 2 (optional):
+# VULN_MCP_URL=http://127.0.0.1:8765/mcp
+# ...or leave unset to spawn the MCP server over stdio, which needs:
 VULN_MCP_PROJECT_DIR=/absolute/path/to/claud-playground
 PYTHON_BIN=python3
 ```
@@ -136,11 +145,13 @@ Open **http://localhost:5175**.
 
 ## Run order
 
-Seed (once) → download API → agent backend → frontend. Only the
-**download API**, **agent backend**, and **frontend** need to be kept
-running simultaneously for the app to work end-to-end - the MCP server
-(step 2) is only run standalone if you're pointing a generic MCP
-client at it; `one_search_agent` spawns its own copy automatically.
+Seed (once) → MCP server → download API → agent backend → frontend.
+For the recommended independent-HTTP setup (step 2), keep the MCP
+server running alongside the **download API**, **agent backend**, and
+**frontend**, with `VULN_MCP_URL` set in each agent's `.env`.
+Alternatively, leave `VULN_MCP_URL` unset and the agent spawns its own
+stdio copy of the MCP server automatically - then only the download
+API, agent backend, and frontend need to be kept running.
 
 ## Restarting a service
 

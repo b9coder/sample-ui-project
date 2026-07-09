@@ -2,7 +2,9 @@
 
 A LangGraph agent exposing natural-language vulnerability search over
 AG-UI's SSE protocol, backed by the `vulnerability_mcp` MCP server
-(connected over stdio - see `../vulnerability_mcp/`).
+(connected over HTTP via `VULN_MCP_URL`, or spawned over stdio when
+that's unset - see `../vulnerability_mcp/` and "Reaching the MCP
+server" below).
 
 The dashboard (KPI cards, charts, filter panel, results table,
 download link) is built deterministically in Python from each turn's
@@ -82,6 +84,9 @@ Create a `.env` file in this directory:
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# Connect to an independently-running HTTP MCP server (optional):
+# VULN_MCP_URL=http://127.0.0.1:8765/mcp
+# ...or leave it unset to spawn the MCP server over stdio, which needs:
 VULN_MCP_PROJECT_DIR=/absolute/path/to/claud-playground
 PYTHON_BIN=python3
 
@@ -94,10 +99,22 @@ COMPOSER_MODE=deterministic   # deterministic (default) | llm | hybrid
 OPENROUTER_SSL_VERIFY=true
 ```
 
-`VULN_MCP_PROJECT_DIR` must point at the directory that *contains*
-`vulnerability_mcp/` (the project root, one level up from here) - this
-agent spawns `python -m vulnerability_mcp.server` as a stdio
-subprocess with that as its working directory.
+### Reaching the MCP server
+
+Two options, via env:
+
+- **`VULN_MCP_URL`** set - connect to an **independently-running** HTTP
+  MCP service (start it separately with
+  `VULN_MCP_MCP_TRANSPORT=streamable-http python -m vulnerability_mcp.server`,
+  default `http://127.0.0.1:8765/mcp`). This agent does NOT spawn or
+  manage the MCP server, so their lifecycles are decoupled. Access
+  control is unchanged - `employee_id` is a tool argument, so it works
+  identically over HTTP.
+- **`VULN_MCP_URL`** unset (default) - the agent spawns `python -m
+  vulnerability_mcp.server` as a stdio subprocess itself; then
+  `VULN_MCP_PROJECT_DIR` must point at the directory that *contains*
+  `vulnerability_mcp/` (the project root, one level up from here) and
+  `PYTHON_BIN` at its venv.
 
 ## Running
 
@@ -110,8 +127,9 @@ Verify: `curl http://localhost:8003/health` → `{"status":"ok"}`.
 This single process:
 - Serves AG-UI's SSE protocol at `POST /agui` (the frontend's only
   integration point - there's no separate REST chat endpoint).
-- Spawns the `vulnerability_mcp` MCP server itself over stdio on
-  startup - nothing else needs to be running for that part.
+- Reaches the `vulnerability_mcp` MCP server either over HTTP (when
+  `VULN_MCP_URL` is set - start that server separately) or by spawning
+  it over stdio on startup (when unset). See "Reaching the MCP server".
 
 Also needs (run separately, see the root `README.md`):
 - `vulnerability_mcp`'s download API (port 8000) - serves the CSV

@@ -58,16 +58,24 @@ PROJECT_DIR = os.environ.get(
 PYTHON_BIN = os.environ.get("PYTHON_BIN", "python3")
 A2UI_MODEL = os.environ.get("A2UI_MODEL") or os.environ.get("OPENROUTER_MODEL")
 
-mcp_client = MultiServerMCPClient(
-    {
-        "vulnerability": {
-            "transport": "stdio",
-            "command": PYTHON_BIN,
-            "args": ["-m", "vulnerability_mcp.server"],
-            "cwd": PROJECT_DIR,
-        }
+# Two ways to reach the vulnerability MCP server:
+#   - VULN_MCP_URL set  -> connect to an INDEPENDENTLY-running HTTP MCP
+#     service (started separately, e.g. `python -m vulnerability_mcp.server`
+#     with VULN_MCP_MCP_TRANSPORT=streamable-http). This agent does NOT
+#     spawn or manage it.
+#   - VULN_MCP_URL unset -> spawn the server as a stdio subprocess (the
+#     original behavior, convenient for local single-command dev).
+VULN_MCP_URL = os.environ.get("VULN_MCP_URL")
+if VULN_MCP_URL:
+    _mcp_connection: dict[str, Any] = {"transport": "streamable_http", "url": VULN_MCP_URL}
+else:
+    _mcp_connection = {
+        "transport": "stdio",
+        "command": PYTHON_BIN,
+        "args": ["-m", "vulnerability_mcp.server"],
+        "cwd": PROJECT_DIR,
     }
-)
+mcp_client = MultiServerMCPClient({"vulnerability": _mcp_connection})
 
 # Vulnerability-query tools that must carry the authenticated identity
 # for access control (the MCP server ANDs an access clause whenever

@@ -92,16 +92,21 @@ PYTHON_BIN = os.environ.get("PYTHON_BIN", "python3")
 COMPOSER_MODE = os.environ.get("COMPOSER_MODE", "deterministic").strip().lower()
 COMPOSER_MODEL = os.environ.get("COMPOSER_MODEL") or os.environ.get("OPENROUTER_MODEL")
 
-mcp_client = MultiServerMCPClient(
-    {
-        "vulnerability": {
-            "transport": "stdio",
-            "command": PYTHON_BIN,
-            "args": ["-m", "vulnerability_mcp.server"],
-            "cwd": PROJECT_DIR,
-        }
+# VULN_MCP_URL set -> connect to an INDEPENDENTLY-running HTTP MCP
+# service (this agent doesn't spawn it); unset -> spawn it over stdio
+# (original single-command dev behavior). See a2ui_agent for the same
+# pattern and the READMEs for how to run the server standalone.
+VULN_MCP_URL = os.environ.get("VULN_MCP_URL")
+if VULN_MCP_URL:
+    _mcp_connection: dict[str, Any] = {"transport": "streamable_http", "url": VULN_MCP_URL}
+else:
+    _mcp_connection = {
+        "transport": "stdio",
+        "command": PYTHON_BIN,
+        "args": ["-m", "vulnerability_mcp.server"],
+        "cwd": PROJECT_DIR,
     }
-)
+mcp_client = MultiServerMCPClient({"vulnerability": _mcp_connection})
 
 # Static field/column definitions the frontend's FilterPanel/Table
 # render from - these never change, so there's no need for the LLM (or

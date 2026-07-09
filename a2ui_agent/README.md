@@ -135,6 +135,9 @@ OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 A2UI_MODEL=openai/gpt-4o-mini              # UI-generation model (optional)
+# Connect to an independently-running HTTP MCP server (recommended):
+VULN_MCP_URL=http://127.0.0.1:8765/mcp
+# ...or leave VULN_MCP_URL unset to spawn it over stdio, which needs:
 VULN_MCP_PROJECT_DIR=/absolute/path/to/claud-playground
 PYTHON_BIN=/abs/path/to/vulnerability_mcp/.venv/bin/python3
 
@@ -163,10 +166,23 @@ chips, and clicking one asks it. It's a **tunable module**:
 - The just-asked question is always filtered out, and duplicates are
   removed.
 
-`VULN_MCP_PROJECT_DIR` must contain `vulnerability_mcp/` - this agent
-spawns `python -m vulnerability_mcp.server` over stdio with that cwd,
-using `PYTHON_BIN` (point it at the `vulnerability_mcp` venv so its deps
-resolve). Seed the DB once from the project root:
+### Reaching the MCP server
+
+Two options, via env:
+
+- **`VULN_MCP_URL`** set (recommended) — connect to an
+  **independently-running** HTTP MCP service (start it separately:
+  `VULN_MCP_MCP_TRANSPORT=streamable-http python -m vulnerability_mcp.server`,
+  default `http://127.0.0.1:8765/mcp`). This agent does NOT spawn or
+  manage the MCP server, so their lifecycles are decoupled. Access
+  control is unchanged — `employee_id` is a tool argument, so it works
+  identically over HTTP.
+- **`VULN_MCP_URL`** unset — the agent spawns `python -m
+  vulnerability_mcp.server` over stdio itself; then
+  `VULN_MCP_PROJECT_DIR` must contain `vulnerability_mcp/` and
+  `PYTHON_BIN` must point at its venv.
+
+Seed the DB once from the project root:
 `python -m vulnerability_mcp.seed_data`.
 
 ## Running
