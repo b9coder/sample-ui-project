@@ -71,6 +71,17 @@ layouts and a Python developer build the agent as independent projects.
   by default; override with `A2UI_CATALOG_MANIFEST`). A future increment
   can instead receive it over AG-UI via A2UI client capabilities - the
   parsing stays the same.
+- **The LLM's layout output schema is GENERATED from the manifest**
+  (`layout.py`'s `build_layout_model`): each element's JSON-Schema
+  `props` becomes a Pydantic model, assembled into the discriminated
+  `Layout` union handed to `with_structured_output`. There is no
+  hand-written element schema in the agent, so the set of elements/props
+  the LLM may emit **cannot drift** from what the UI published - it *is*
+  the manifest. The same manifest also feeds the generation prompt
+  (`manifest_element_guide`), so the model's guidance and its output
+  schema come from one source. The only agent-side policy on top is
+  `SUPPRESSED_ELEMENT_TYPES` (e.g. `markdown`, since the surface is
+  visual-only) - a documented choice, not a duplicated schema.
 - `compile_layout` (in `layout.py`) reads each element's `placement`
   (solo vs combinable), `dataRefProps` (trust), `dataBinding`, and
   target `component` name **from the manifest** - nothing element-
@@ -83,11 +94,13 @@ layouts and a Python developer build the agent as independent projects.
   any drift - e.g. the manifest advertising an element the agent can't
   emit yet, or a `dataBinding` with no registered provider.
 
-The boundary: a **presentation-only** element the UI adds needs no agent
-change beyond its Pydantic model (a documented next step is generating
-those from the manifest too); a **new trusted data source** needs a
-one-line `data_providers.py` entry. Keep the manifest's `catalogId` in
-sync with `a2ui_schema.py`'s `CATALOG_ID`.
+The boundary: a **presentation-only** element the UI adds (its `props`
+and `placement` in the manifest) needs **no agent code change at all** -
+regenerate the manifest and the agent offers it automatically. A **new
+trusted data source** needs a one-line `data_providers.py` entry (the
+manifest names the `dataBinding`; the agent supplies how to pull it).
+Keep the manifest's `catalogId` in sync with `a2ui_schema.py`'s
+`CATALOG_ID`.
 
 ## Landing / orientation experience
 

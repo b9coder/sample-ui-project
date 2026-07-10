@@ -22,9 +22,9 @@ markdown narration - just not the low-level tree mechanics.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from a2ui_schema import ROOT_ID
 from catalog_manifest import CatalogManifest, load_manifest
@@ -39,18 +39,21 @@ logger = logging.getLogger(__name__)
 # compile_layout reads its rules instead of hard-coding them.
 MANIFEST: CatalogManifest = load_manifest()
 
-# Element types this agent's Pydantic Layout schema (below) can currently
-# EMIT. The manifest may advertise more (a UI ahead of the agent) or
-# fewer; check_manifest_consistency() surfaces the drift. Fully removing
-# this hand-maintained set requires generating the Pydantic models from
-# the manifest too (a documented next increment).
+# The LLM's layout output schema is GENERATED FROM THE MANIFEST at import
+# (build_layout_model below) - there is no hand-maintained list of element
+# types or per-element Pydantic model in this file, so the agent's
+# emittable set cannot drift from what the UI published. Add an element in
+# the UI, regenerate the manifest, and the agent offers it automatically:
+# a presentation-only element needs nothing else here; a new trusted data
+# source needs one data_providers.py entry.
 #
-# NOTE: `markdown` is in the manifest (the UI supports it) but the agent
-# deliberately does NOT emit it into the surface - narration already
-# renders as the chat text reply above the surface, so a markdown
-# element there would just duplicate it (and, mixed into a KPI row,
-# squeeze the tiles). The a2ui surface is visual-only here.
-KNOWN_ELEMENT_TYPES = {"kpi", "chart", "table", "download", "filter"}
+# The one deliberate agent-side POLICY (not a schema copy) is to SUPPRESS
+# `markdown`. The UI supports it, but this a2ui surface is VISUAL ONLY -
+# narration already renders as the chat text reply above the surface, so a
+# markdown element would just duplicate it (and, mixed into a KPI row,
+# squeeze the tiles). Suppressed types are still renderable by the
+# compiler; they're simply never offered to the LLM.
+SUPPRESSED_ELEMENT_TYPES = {"markdown"}
 
 # Maps get_vulnerability_summary request args to filter field names, so a
 # filter panel can reflect the currently-applied filters.
@@ -67,22 +70,19 @@ ARG_TO_FILTER_FIELD = {
 
 
 def check_manifest_consistency(manifest: CatalogManifest = MANIFEST) -> None:
-    """Log (don't crash) any drift between the shared manifest and this
-    agent's capabilities, so mismatches are visible at startup."""
-    manifest_types = set(manifest.elements)
-    # A UI ahead of the agent (manifest lists more) is fine - the agent
-    # just doesn't emit those yet; log at INFO. An agent ahead of the UI
-    # (emits something the manifest lacks) IS a problem - the client
-    # can't render it; log at WARNING.
-    if manifest_types - KNOWN_ELEMENT_TYPES:
+    """Log (don't crash) the only things that can still legitimately
+    mismatch now that the output schema is manifest-derived.
+
+    Element-type drift is gone by construction (the schema IS the
+    manifest). What remains genuinely agent-owned: (1) every element the
+    manifest binds to a server dataset needs a registered provider, and
+    (2) a suppression that no longer matches any manifest element is
+    stale and worth noting."""
+    stale = SUPPRESSED_ELEMENT_TYPES - set(manifest.elements)
+    if stale:
         logger.info(
-            "Manifest advertises elements the agent doesn't emit "
-            "(expected if the UI is ahead): %s", manifest_types - KNOWN_ELEMENT_TYPES,
-        )
-    if KNOWN_ELEMENT_TYPES - manifest_types:
-        logger.warning(
-            "Agent can emit elements the manifest doesn't list (UI won't "
-            "render them): %s", KNOWN_ELEMENT_TYPES - manifest_types,
+            "Suppressed element types are not in the manifest (stale "
+            "suppression?): %s", stale,
         )
     for etype, spec in manifest.elements.items():
         if spec.data_binding and spec.data_binding not in DATA_PROVIDERS:
@@ -90,86 +90,125 @@ def check_manifest_consistency(manifest: CatalogManifest = MANIFEST) -> None:
                 "Element %r needs data binding %r but no provider is "
                 "registered (data_providers.py)", etype, spec.data_binding,
             )
-
-
-# --- LLM output schema: rows of typed elements ---
-# (No markdown element on purpose - the surface is visual-only; the
-# narration is the chat text reply. See KNOWN_ELEMENT_TYPES above.)
-class KpiElement(BaseModel):
-    type: Literal["kpi"]
-    label: str = Field(description="What the number means, e.g. 'Past Due'.")
-    # PREFERRED: a dotted path to a trusted scalar in the tool results,
-    # e.g. 'get_vulnerability_summary.summary.total_past_due'. When it
-    # resolves, Python binds the real value and the tile is marked
-    # trusted. Only fall back to `value` if no path fits.
-    valueRef: str | None = Field(
-        default=None, description="Dotted path to a trusted scalar (preferred over value)."
-    )
-    value: str | None = Field(
-        default=None, description="Inline value ONLY if no valueRef path fits (untrusted)."
+    logger.info(
+        "Layout schema derived from manifest %s v%s: offering %s (suppressed %s)",
+        manifest.catalog_id, manifest.version,
+        sorted(OFFERED_ELEMENT_TYPES), sorted(SUPPRESSED_ELEMENT_TYPES),
     )
 
 
-class ChartElement(BaseModel):
-    type: Literal["chart"]
-    chartType: Literal["bar", "horizontalBar", "line", "pie", "donut"]
-    title: str
-    # PREFERRED: a dotted path to trusted data in the tool results, e.g.
-    # 'get_vulnerability_summary.breakdowns.severity_breakdown' (a
-    # category->count map) or 'get_risk_ranking.ranking' (a list). When
-    # it resolves, Python binds the real data and the chart is marked
-    # trusted - do NOT also fill data/xKey/series in that case.
-    dataRef: str | None = Field(
-        default=None, description="Dotted path to trusted data (preferred over inline data)."
-    )
-    # Inline fallback ONLY when no dataRef fits (chart is then untrusted):
-    xKey: str | None = Field(default=None, description="Label field name (inline fallback).")
-    series: list[str] | None = Field(default=None, description="Value field name(s) (inline).")
-    data: list[dict[str, Any]] | None = Field(
-        default=None, description="Inline data ONLY if no dataRef fits (untrusted)."
-    )
+# --- LLM output schema: GENERATED FROM THE MANIFEST ---
+# Each manifest element publishes a JSON-Schema `props` block (authored by
+# the UI). We turn every non-suppressed element into a Pydantic model (its
+# `type` literal + one field per prop), assemble those into a discriminated
+# union, and wrap it as rows -> Layout. `with_structured_output(Layout)`
+# then constrains the LLM to exactly the manifest's elements and props - so
+# the "layout definition" IS the manifest, with no second schema to sync.
+_JSON_SCALARS: dict[str, Any] = {
+    "string": str, "integer": int, "number": float, "boolean": bool,
+}
 
 
-class TableElement(BaseModel):
-    """A records table. Rows/columns are injected by Python from
-    get_vulnerability_records - only include this when the user asked to
-    see individual findings and that tool was called."""
-
-    type: Literal["table"]
-    title: str | None = None
-
-
-class DownloadElement(BaseModel):
-    """A CSV download button. The URL is injected by Python from the
-    summary export - only include when a summary was produced."""
-
-    type: Literal["download"]
-    label: str | None = None
-
-
-class FilterElement(BaseModel):
-    """The refine-results filter panel. Fields/values injected by
-    Python."""
-
-    type: Literal["filter"]
+def _py_type(schema: dict[str, Any]) -> Any:
+    """Map one JSON-Schema property (as the manifest publishes them) to a
+    Python type for a Pydantic field. Covers the shapes the manifest uses;
+    anything unrecognized falls back to Any (still valid, just unconstrained)."""
+    t = schema.get("type")
+    if t == "string" and schema.get("enum"):
+        return Literal[tuple(schema["enum"])]  # type: ignore[valid-type]
+    if t in _JSON_SCALARS:
+        return _JSON_SCALARS[t]
+    if t == "array":
+        item = schema.get("items") or {}
+        return list[_py_type(item)] if item else list[Any]
+    if t == "object":
+        return dict[str, Any]
+    return Any
 
 
-LayoutElement = Union[
-    KpiElement, ChartElement, TableElement, DownloadElement, FilterElement
-]
-LayoutElementField = Annotated[LayoutElement, Field(discriminator="type")]
-
-
-class LayoutRow(BaseModel):
-    elements: list[LayoutElementField] = Field(
-        description="One or more elements shown side by side in this row."
+def _element_model(spec) -> type[BaseModel]:
+    """Build the Pydantic model for one manifest element from its `props`
+    JSON Schema (plus the `type` discriminator literal)."""
+    props = spec.props or {}
+    properties = props.get("properties") or {}
+    required = set(props.get("required") or ())
+    fields: dict[str, Any] = {"type": (Literal[spec.type], ...)}  # type: ignore[valid-type]
+    for name, pschema in properties.items():
+        pytype = _py_type(pschema)
+        desc = (pschema or {}).get("description")
+        if name in required:
+            fields[name] = (pytype, Field(description=desc))
+        else:
+            fields[name] = (Optional[pytype], Field(default=None, description=desc))
+    return create_model(
+        f"{spec.type.capitalize()}Element",
+        __doc__=f"Manifest element {spec.type!r} (renders as {spec.component}).",
+        **fields,
     )
 
 
-class Layout(BaseModel):
-    """The full screen: an ordered list of rows."""
+def build_layout_model(
+    manifest: CatalogManifest = MANIFEST,
+    suppressed: set[str] = SUPPRESSED_ELEMENT_TYPES,
+) -> tuple[type[BaseModel], list[str]]:
+    """Assemble the Layout Pydantic model straight from the manifest.
+    Returns (Layout model, ordered list of offered element types)."""
+    offered = [t for t in manifest.elements if t not in suppressed]
+    if not offered:
+        raise ValueError("Manifest offers no (non-suppressed) elements to emit")
+    models = [_element_model(manifest.elements[t]) for t in offered]
+    if len(models) > 1:
+        element_field: Any = Annotated[Union[tuple(models)], Field(discriminator="type")]
+    else:
+        element_field = models[0]
+    row_model = create_model(
+        "LayoutRow",
+        elements=(list[element_field], Field(
+            description="One or more elements shown side by side in this row.")),
+    )
+    layout_model = create_model(
+        "Layout",
+        __doc__="The full screen: an ordered list of rows.",
+        rows=(list[row_model], Field(description="Ordered rows, top to bottom.")),
+    )
+    return layout_model, offered
 
-    rows: list[LayoutRow]
+
+# Built once at import from the loaded manifest. `Layout` is what agent.py
+# hands to with_structured_output; OFFERED_ELEMENT_TYPES is used for the
+# manifest-derived prompt guide and the startup consistency log.
+Layout, OFFERED_ELEMENT_TYPES = build_layout_model()
+
+
+def manifest_element_guide(
+    manifest: CatalogManifest = MANIFEST,
+    offered: list[str] | None = None,
+) -> str:
+    """A compact, MANIFEST-DERIVED description of the offered elements
+    (placement, trusted-ref props, server-injected bindings, authored
+    props) for the generation prompt - so the LLM's guidance and its
+    output schema come from the same source, never contradicting."""
+    offered = offered if offered is not None else OFFERED_ELEMENT_TYPES
+    lines: list[str] = []
+    for t in offered:
+        spec = manifest.elements[t]
+        properties = (spec.props or {}).get("properties") or {}
+        required = set((spec.props or {}).get("required") or ())
+        placement = ("its OWN full-width row" if spec.placement == "solo"
+                     else "may share a row with other combinable elements")
+        refs = (f" Trusted-reference prop(s) (preferred - bind real data): "
+                f"{', '.join(spec.data_ref_props)}." if spec.data_ref_props else "")
+        binding = (" The server injects its data - just add an empty element "
+                   "(optional authored props below)." if spec.data_binding else "")
+        prop_bits = [n + ("*" if n in required else "") for n in properties] or ["(none)"]
+        lines.append(
+            f"- {t}: takes {placement}.{refs}{binding} "
+            f"Props: {', '.join(prop_bits)}."
+        )
+    return (
+        "Supported elements come from the UI's catalog manifest "
+        "(* = required prop):\n" + "\n".join(lines)
+    )
 
 
 # --- Deterministic compiler: Layout -> a2ui component list ---
